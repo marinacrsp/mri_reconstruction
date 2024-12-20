@@ -3,10 +3,10 @@ seed: 7
 # runtype: train
 runtype: test
 
-# hash_freeze: True
-hash_freeze: False
+hash_freeze: True
+# hash_freeze: False
 
-path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_02_05_inf
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_09_inf
 
 model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_04/2024-12-07_13h32m31s/checkpoints/epoch_0599.pt
 
@@ -44,7 +44,7 @@ loss:
 optimizer:
   id: Adam
   params:
-    lr: 0.00001 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
+    lr: 5.e-6 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
 
 scheduler:
   id: StepLR

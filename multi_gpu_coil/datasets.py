@@ -22,20 +22,21 @@ class KCoordDataset(Dataset):
         with_mask: bool = True,
         acceleration: int = 2,
         center_frac: float = 0.15,
+        vol_id0: int = 0,
     ):
         self.metadata = {}
         self.inputs = []
         self.targets = []
-
+        
         path_to_data = Path(path_to_data)
         if path_to_data.is_dir():
             files = sorted(
                 [
                     file
                     for file in path_to_data.iterdir()
-                    if file.suffix == ".h5" and "AXT1POST_205" in file.name
+                    if file.suffix == ".h5" and "AXT1POST_205" in file.name ## NOTE: Total number of files is 90
                 ]
-            )[:n_volumes]
+            )[vol_id0:vol_id0+n_volumes]
         else:
             files = [path_to_data]
 

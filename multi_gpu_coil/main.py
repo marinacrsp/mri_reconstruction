@@ -59,12 +59,14 @@ def main(rank: int, world_size: int, config: dict):
     
 
     # N.B. Since we are using a sampler, we need to set shuffle to False.
-    num_workers = int(os.environ['SLURM_CPUS_PER_TASK'])//world_size - 1
+    num_workers = int(os.environ['SLURM_CPUS_PER_TASK'])//world_size 
+    batch_size = loader_config["effective_batch_size"]//world_size
     
+    print(batch_size)
     #################### DATALOADING TO MULTIGPU ######################
     dataloader = DataLoader(
         dataset,
-        batch_size=loader_config["effective_batch_size"]//world_size,
+        batch_size=batch_size,
         num_workers=num_workers, # This is needed to make processing faster 
         shuffle=False,
         sampler=DistributedSampler(dataset),
@@ -122,19 +124,32 @@ def main(rank: int, world_size: int, config: dict):
 
             
     elif config["runtype"] == "train":
-        phi_coil_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["coil_embedding_dim"],))
-        embeddings_coil.weight.data.copy_(phi_coil_zero.unsqueeze(0).repeat(total_n_coils.item(), 1))
+        embeddings_coil = torch.nn.Embedding(total_n_coils.item(), model_params['coil_embedding_dim'])
+        embeddings_vol = torch.nn.Embedding(len(dataset.metadata), model_params['vol_embedding_dim'])
+
+        phi_coil_zero = torch.nn.Embedding(1, model_params['coil_embedding_dim'])
+        phi_vol_zero = torch.nn.Embedding(1, model_params['vol_embedding_dim'])
         
-        phi_vol_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["vol_embedding_dim"],))
-        embeddings_vol.weight.data.copy_(phi_vol_zero.unsqueeze(0).repeat(len(dataset.metadata), 1))
         
         if "model_checkpoint" in config.keys():
             model_state_dict = torch.load(config["model_checkpoint"])[
                 "model_state_dict"
             ]
             model.load_state_dict(model_state_dict)
+            print("Loading the dictionary of embeddings from pretrained checkpoint")
+            embeddings_vol.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"][:len(dataset.metadata)])
+            embeddings_coil.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"][:total_n_coils.item()])
             
             print(f"GPU{rank}] Checkpoint loaded successfully.")
+            
+        else:
+            ## Initialize the phi volumes for the coil and volume
+            torch.nn.init.normal_(phi_coil_zero.weight.data, 0.0, 0.1)
+            torch.nn.init.normal_(phi_vol_zero.weight.data, 0.0, 0.1)
+
+            ## Copy the values into the dictionary of embeddings
+            embeddings_coil.weight.data.copy_(phi_coil_zero.weight.data)
+            embeddings_vol.weight.data.copy_(phi_vol_zero.weight.data)
 
         optimizer = OPTIMIZER_CLASSES[config["optimizer"]["id"]](
             chain(embeddings_vol.parameters(), embeddings_coil.parameters(), model.parameters()),

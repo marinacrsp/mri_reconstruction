@@ -93,32 +93,44 @@ def main():
 
         # Load checkpoint.
         model_state_dict = torch.load(config["model_checkpoint"])["model_state_dict"]
-        optimizer_state_dict = torch.load(config["model_checkpoint"])["optimizer_state_dict"]
-        
-        # Compute the vector mean for the optimizer at volume embeddings
-        vol_momentums = [optimizer_state_dict["state"][0]["exp_avg"].mean(dim=0), optimizer_state_dict["state"][0]["exp_avg_sq"].mean(dim=0)]
-        
-        # Compute the vector mean for the optimizer at coil embeddings
-        coil_momentums = [optimizer_state_dict["state"][1]["exp_avg"].mean(dim=0), optimizer_state_dict["state"][1]["exp_avg_sq"].mean(dim=0)]
-        
-        # torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]
-        # torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]
-        # phi_coil_zero = torch.load(config["model_checkpoint"])["phi_coil"]
-        # phi_vol_zero = torch.load(config["model_checkpoint"])["phi_vol"]
-        
-        phi_coil_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["coil_embedding_dim"],))
-        phi_vol_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["vol_embedding_dim"],))
-        
-        # phi_vol_zero = torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"][0]
-        # phi_coil_zero = torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"][0]
-        
-        embeddings_coil.weight.data.copy_(phi_coil_zero.unsqueeze(0).repeat(total_n_coils.item(), 1))
-        embeddings_vol.weight.data.copy_(phi_vol_zero.unsqueeze(0).repeat(len(dataset.metadata), 1))
-        
-        # embeddings_vol.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"][:config["dataset"]["n_volumes"]])
-        # embeddings_coil.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"][:total_n_coils])
-        
         model.load_state_dict(model_state_dict)
+        
+        #### Embedding
+        phi_coil_zero = torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"]
+        phi_vol_zero = torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"]
+        print("Loading the dictionary of embeddings from pretrained checkpoint")
+        embeddings_vol.weight.data.copy_(phi_vol_zero[:len(dataset.metadata)])
+        embeddings_coil.weight.data.copy_(phi_coil_zero[:total_n_coils.item()])        
+
+        # phi_coil_zero = torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"].mean(0)
+        # phi_vol_zero = torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"].mean(0)
+        # print("Initialization from mean of embeddings: ")
+        # embeddings_coil.weight.data.copy_(phi_coil_zero.unsqueeze(0).repeat(total_n_coils.item(), 1))
+        # embeddings_vol.weight.data.copy_(phi_vol_zero.unsqueeze(0).repeat(len(dataset.metadata), 1))
+
+        # print("Reinitialization of embeddings: ")
+        # phi_coil_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["coil_embedding_dim"],))
+        # phi_vol_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["vol_embedding_dim"],))
+        # embeddings_coil.weight.data.copy_(phi_coil_zero.unsqueeze(0).repeat(total_n_coils.item(), 1))
+        # embeddings_vol.weight.data.copy_(phi_vol_zero.unsqueeze(0).repeat(len(dataset.metadata), 1))
+    
+        ##### Optimizer
+        optimizer = torch.load(config["model_checkpoint"])["optimizer_state_dict"]
+        print("Initialization of optimizer from mean of checkpoint dictionary: ")
+        vol_optim = [optimizer["state"][0]["exp_avg"].mean(0).unsqueeze(0).expand(len(dataset.metadata), model_params["vol_embedding_dim"]), 
+                    optimizer["state"][0]["exp_avg_sq"].mean(0).unsqueeze(0).expand(len(dataset.metadata), model_params["vol_embedding_dim"])]
+        
+        coil_optim = [optimizer["state"][1]["exp_avg"].mean(0).unsqueeze(0).expand(total_n_coils.item(), model_params["coil_embedding_dim"]), 
+                    optimizer["state"][1]["exp_avg_sq"].mean(0).unsqueeze(0).expand(total_n_coils.item(), model_params["coil_embedding_dim"])]
+        
+
+        
+        # print("Loading optimizer checkpoint")
+        # vol_optim = [optimizer["state"][0]["exp_avg"][:len(dataset.metadata)], optimizer["state"][0]["exp_avg_sq"][:len(dataset.metadata)]]
+        # coil_optim = [optimizer["state"][1]["exp_avg"][:total_n_coils.item()], optimizer["state"][1]["exp_avg_sq"][:total_n_coils.item()]]
+        
+
+    
         print("Checkpoint loaded successfully.")
         
         
@@ -134,20 +146,18 @@ def main():
         else:
             print('Optimizing volume, coil and hash embeddings...')
             # Freeze the parameters in sine layers
-            for param in model.sine_layers.parameters():
+            for param in model.parameters():
                 param.requires_grad = False
-            # Freeze the parameters in output layer (in case they are not frozen)
-            for param in model.output_layer.parameters():
-                param.requires_grad = False
+                
+            for param in model.embed_fn.parameters():
+                param.requires_grad = True
                 
             # Only embeddings and Hash encoders are optimized.
             optimizer = OPTIMIZER_CLASSES[config["optimizer"]["id"]](
                 chain(embeddings_vol.parameters(), embeddings_coil.parameters(), model.embed_fn.parameters(),), **config["optimizer"]["params"]
             )
             
-        # print(optimizer.state_dict())
-        
-        
+
     
     elif config["runtype"] == "train":
         phi_coil_zero = torch.normal(0.0, config["loss"]["params"]["sigma"], size=(model_params["coil_embedding_dim"],))
@@ -190,10 +200,10 @@ def main():
         dataloader=dataloader,
         embeddings_vol=embeddings_vol,
         phi_vol=phi_vol_zero,
-        vol_momentums = vol_momentums,
+        vol_momentums = vol_optim,
         embeddings_coil = embeddings_coil,
         phi_coil=phi_coil_zero,
-        coil_momentums = coil_momentums,
+        coil_momentums = coil_optim,
         embeddings_start_idx=start_idx,
         model=model,
         loss_fn=loss_fn,

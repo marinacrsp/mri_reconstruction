@@ -64,10 +64,10 @@ class Trainer:
                     hf["reconstruction_rss"][()][: config["dataset"]["n_slices"]]
                 )
                 self.kspace_gt.append(
-                    tensor_to_complex_np(to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
+                    to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
                 )
                     )
-                    )
+                    
                 )
 
         # Scientific and nuissance hyperparameters.
@@ -99,9 +99,9 @@ class Trainer:
             # TODO: UNCOMMENT WHEN USING LR SCHEDULER.
             # self.writer.add_scalar("Learning Rate", self.scheduler.get_last_lr()[0], epoch_idx)
             
-            if self.config["runtype"] == "train":
-                if (epoch_idx + 1) % self.meta_reinitialization == 0:
-                    self._reptile_initialization()
+            # if self.config["runtype"] == "train":
+            #     if (epoch_idx + 1) % self.meta_reinitialization == 0:
+            #         self._reptile_initialization()
                     
             if (epoch_idx + 1) % self.log_interval == 0:
                 self._log_performance(epoch_idx)
@@ -159,17 +159,17 @@ class Trainer:
 
             self.optimizer.step()
             
-            if epoch_idx == 0:
+            # if (epoch_idx + 1) <= 50:
                 
-                print('Updating optimizers for volume and coils')
-                # print('Pre-update')
-                # print(self.optimizer.state_dict()["state"][1]["exp_avg"][0])
+            #     print('Updating optimizers for volume and coils')
+            #     # print('Pre-update')
+            #     # print(self.optimizer.state_dict()["state"][1]["exp_avg"][0])
                 
-                self.optimizer.state_dict()["state"][0]["exp_avg"] = self.optimizer_vol_init[0].clone()
-                self.optimizer.state_dict()["state"][1]["exp_avg"] = self.optimizer_coil_init[0].clone()
+            #     self.optimizer.state_dict()["state"][0]["exp_avg"] += 2*self.optimizer_vol_init[0].clone()
+            #     self.optimizer.state_dict()["state"][1]["exp_avg"] += 2*self.optimizer_coil_init[0].clone()
                 
-                self.optimizer.state_dict()["state"][0]["exp_avg_sq"] = self.optimizer_vol_init[1].clone()
-                self.optimizer.state_dict()["state"][1]["exp_avg_sq"] = self.optimizer_coil_init[1].clone()
+            #     self.optimizer.state_dict()["state"][0]["exp_avg_sq"] += 2*self.optimizer_vol_init[1].clone()
+            #     self.optimizer.state_dict()["state"][1]["exp_avg_sq"] += 2*self.optimizer_coil_init[1].clone()
 
                 # print('Post-update')
                 # print(self.optimizer.state_dict()["state"][1]["exp_avg"][0])
@@ -213,9 +213,10 @@ class Trainer:
 
         volume_kspace = torch.zeros(
             (n_slices, n_coils, height, width, 2),
-            device=self.device,
             dtype=torch.float32,
-        )
+            device = self.device
+        )  
+
         for point_ids in dataloader:
             point_ids = point_ids[0].to(self.device, dtype=torch.long)
             coords = torch.zeros_like(
@@ -230,225 +231,199 @@ class Trainer:
 
             # Need to add `:len(coords)` because the last batch has a different size (than 60_000).
             outputs = self.model(coords, vol_embeddings[: len(coords)], coil_embeddings)
-            
-            # "Fill in" the unsampled region.
+
+            # "Fill in" the unsampled region.            
             volume_kspace[
                 point_ids[:, 2], point_ids[:, 3], point_ids[:, 1], point_ids[:, 0]
             ] = outputs
 
-        # Multiply by the normalization constant.
-        volume_kspace = (
-            volume_kspace * self.dataloader.dataset.metadata[vol_id]["norm_cste"]
-        )
 
+        # # Multiply by the normalization constant.
+        volume_kspace_weighted = tensor_to_complex_np(
+            volume_kspace.detach().cpu() * self.dataloader.dataset.metadata[vol_id]["norm_cste"])
         volume_kspace = tensor_to_complex_np(volume_kspace.detach().cpu())
-
+        
         coils_img = []
         for i in range(4):
-            coils_img.append(np.abs(inverse_fft2_shift(volume_kspace)[:,i]))
-
+            coils_img.append(np.abs(inverse_fft2_shift(volume_kspace_weighted)[:,i]))
+            
         self.model.train()
-        return volume_kspace, coils_img
+        
+        return volume_kspace, volume_kspace_weighted, coils_img
 
     @torch.no_grad() 
     def _log_performance(self, epoch_idx):
         for vol_id in self.dataloader.dataset.metadata.keys():
             # Predict volume image.
             shape = self.dataloader.dataset.metadata[vol_id]["shape"]
-            # print(shape)
             center_data = self.dataloader.dataset.metadata[vol_id]["center"]
             left_idx, right_idx, center_vals = (
                 center_data["left_idx"],
                 center_data["right_idx"],
                 center_data["vals"],
             )
-
-            volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
-            
-            ## Edges predicted by the model directly
-            raw_kspace = self.kspace_gt[vol_id]
-            raw_kspace[..., left_idx:right_idx] = 0
-            
-            volume_img = rss(inverse_fft2_shift(volume_kspace))
-            raw_volume_img = rss(inverse_fft2_shift(raw_kspace))
-            
-            volume_kspace_acq_pred = volume_kspace.copy()
-            volume_kspace_wcenter = volume_kspace_acq_pred.copy()
-
-            ## Model predictions with center values
-            volume_kspace_wcenter[..., left_idx:right_idx] = center_vals
-            volume_img_wcenter = rss(inverse_fft2_shift(volume_kspace_wcenter))
-            
-            
-            ## Merge of prediction + acquisitions
-            mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1)
-            predicted_mask = 1-mask.expand(shape).numpy()
-            acquired_mask= mask.expand(shape).numpy()
-        
-            volume_kspace_acq_pred[..., left_idx:right_idx] = center_vals
-            volume_kspace_acq_pred = volume_kspace_acq_pred*(predicted_mask) + self.kspace_gt[vol_id]*(acquired_mask)
-            volume_img_acq_pred = rss(inverse_fft2_shift(volume_kspace_acq_pred))
-            
-            volume_kspace_acq = self.kspace_gt[vol_id]*(acquired_mask)  
-            volume_kspace_acq[..., left_idx:right_idx] = center_vals 
-            volume_img_acq = rss(inverse_fft2_shift(volume_kspace_acq))
-            
-            ##################################################
-            # Log kspace values.
-            ##################################################
-            volume_kspace[..., left_idx:right_idx] = 0
-            volume_kspace = rss(volume_kspace)
-            raw_kspace = rss(raw_kspace)
-            
-            # Plot modulus and argument.
-            modulus = np.abs(volume_kspace)
-            raw_modulus = np.abs(raw_kspace)
-            cste_mod = self.dataloader.dataset.metadata[vol_id]["plot_cste"]
-
-            argument = np.angle(volume_kspace)
+            cste_mod = self.dataloader.dataset.metadata[vol_id]["norm_cste"]
             cste_arg = np.pi / 180
+            
+            ## Fully sampled kspace prediction
+            volume_kspace_unweighted, volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
+            y_kspace_data = tensor_to_complex_np(self.kspace_gt[vol_id])
 
-            ##################################################
-            # Log image space values
-            ##################################################
-            volume_img = np.abs(volume_img)
-            raw_volume_img = np.abs(raw_volume_img)
 
+            # #     np.save(os.path.join(self.path_to_out, 'vol_kspace.npy'), volume_kspace)
+            # #     np.save(os.path.join(self.path_to_out, 'vol_kspace_unw.npy'), volume_kspace_unweighted)
+            # #     np.save(os.path.join(self.path_to_out, 'mask.npy'), mask)
+            # #     np.save(os.path.join(self.path_to_out, 'cste.npy'), cste_mod)
+            # #     np.save(os.path.join(self.path_to_out,'gt.npy'),  y_kspace_data)                
+            
+            
+            
+            ###### predict the modulus
+            mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
+
+            y_kspace_data_u = y_kspace_data  * (mask)
+            y_kspace_prediction_u = volume_kspace * (1-mask)
+            y_kspace_final = y_kspace_data_u + y_kspace_prediction_u
+
+            y_kspace_data_rss = rss(y_kspace_data_u)
+            y_kspace_prediction_rss = rss(y_kspace_prediction_u)
+            y_kspace_final_rss = rss(y_kspace_final)
+            
+            y_kspace_final[..., left_idx:right_idx] = center_vals
+            y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
+            y_kspace_final_wcenter_rss = rss(y_kspace_final)
+            ###### predict the edges - image
+            y_img_edges = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            
+            
+            ###### predict the center - image
+            volume_kspace[..., left_idx:right_idx] = center_vals
+            y_img_edges_center = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            volume_kspace_rss = rss(volume_kspace)
+            
+            ###### raw img w/o 
+            y_kspace_data[..., left_idx:right_idx] = 0
+            raw_img_edges = np.abs(rss(inverse_fft2_shift(y_kspace_data)))
+            
+            
             for slice_id in range(shape[0]):
-                self._plot_info(
-                    modulus[slice_id],
-                    argument[slice_id],
-                    raw_modulus[slice_id],
-                    cste_mod,
-                    cste_arg,
-                    "Modulus",
-                    "Argument",
-                    epoch_idx,
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/kspace")
-                    
-                
-                # Plot 4 coils image
-                fig = plt.figure(figsize=(20, 10))
-                
-                for i in range(4):
-                    plt.subplot(1,4,i+1)
-                    plt.imshow(coils_img[i][slice_id], cmap='gray')
-                    plt.axis('off')
-                
-                self.writer.add_figure(
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
-                
-                # Plot image.
-                fig = plt.figure(figsize=(20, 10))
-                plt.subplot(1,3,1)
-                plt.imshow(volume_img[slice_id], cmap='gray')
-                
-                plt.axis('off')
-                plt.title('Model predictions')
-                plt.subplot(1,3,2)
-                plt.imshow(volume_img_wcenter[slice_id], cmap='gray')
-                
-                plt.axis('off')
-                plt.title('Model predictions + center')
-                plt.subplot(1,3,3)
-                plt.imshow(volume_img_acq_pred[slice_id], cmap='gray')
-                
-                plt.axis('off')
-                plt.title('Model predictions + acquisitions + center')  
+                self._plot_3subplots(y_img_edges, 'Edges',
+                                    y_img_edges_center, 'Edges + centre',
+                                    y_img_final, 'Edges + centre + acquisitions', 
+                                    slice_id, 
+                                    epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img",
+                                    'gray')
 
-                self.writer.add_figure(
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/volume_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
+                self._plot_3subplots(np.abs(y_kspace_data_rss/cste_mod), 'M · ydata',
+                                    np.abs(y_kspace_prediction_rss/cste_mod), '(1-M) · ypred', 
+                                    np.abs(y_kspace_final_rss/cste_mod), 'M · ydata + (1-M)·ypred',
+                                    slice_id, epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace composition",
+                                    'viridis')
 
-                # Plot image.
-                fig = plt.figure(figsize=(20, 10))
-                plt.subplot(1,2,1)
-                plt.imshow(raw_volume_img[slice_id], cmap='gray')
-                plt.axis('off')
-                plt.title('Acquired img edges')
-                plt.subplot(1,2,2)
-                plt.imshow(volume_img_acq[slice_id], cmap='gray')
-                plt.axis('off')
-                plt.title('Artifacted image')
+                self._plot_2subplots(self.ground_truth[vol_id], 'groundtruth vol',
+                                    raw_img_edges, 'groundtruth edges', 
+                                    slice_id, epoch_idx, 
+                                    f"groundtruth/vol_{vol_id}_slice_{slice_id}", 'gray')
                 
-                self.writer.add_figure(
-                    f"groundtruth/vol_{vol_id}/slice_{slice_id}/volume_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
-                
+                self._plot_2subplots(np.log(volume_kspace_rss/cste_mod + 1.e-45), 'kspace predicted',
+                                    np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
+                                    slice_id, epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
+            # volume_kspace[..., left_idx:right_idx] = 0
+            # modulus = np.abs(rss(volume_kspace))
+            # phase = np.angle(rss(volume_kspace))
+
             ############################################################
             # Log evaluation metrics.
-            nmse_val = nmse(raw_volume_img, volume_img)
+            nmse_val = nmse(raw_img_edges, y_img_edges)
             self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_edges", nmse_val, epoch_idx)
 
-            psnr_val = psnr(raw_volume_img, volume_img)
+            psnr_val = psnr(raw_img_edges, y_img_edges)
             self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_edges", psnr_val, epoch_idx)
 
-            ssim_val = ssim(raw_volume_img, volume_img)
+            ssim_val = ssim(raw_img_edges, y_img_edges)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_edges", ssim_val, epoch_idx)
             
-            ############################################################
-            # # Comparison metrics for the volume image w center and the groundtruth
-            nmse_val = nmse(self.ground_truth[vol_id], volume_img_wcenter)
+            # ############################################################
+            # # # Comparison metrics for the volume image w center and the groundtruth
+            nmse_val = nmse(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_wcenter", nmse_val, epoch_idx)
 
-            psnr_val = psnr(self.ground_truth[vol_id], volume_img_wcenter)
+            psnr_val = psnr(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_wcenter", psnr_val, epoch_idx)
 
-            ssim_val = ssim(self.ground_truth[vol_id], volume_img_wcenter)
+            ssim_val = ssim(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
 
-            ############################################################
+            # ############################################################
             # # Comparison metrics for the volume image w center + predictions and the groundtruth
-            nmse_val = nmse(self.ground_truth[vol_id], volume_img_acq_pred)
+            nmse_val = nmse(self.ground_truth[vol_id], y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_acq_pred", nmse_val, epoch_idx)
 
-            psnr_val = psnr(self.ground_truth[vol_id], volume_img_acq_pred)
+            psnr_val = psnr(self.ground_truth[vol_id], y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_acq_pred", psnr_val, epoch_idx)
 
-            ssim_val = ssim(self.ground_truth[vol_id], volume_img_acq_pred)
+            ssim_val = ssim(self.ground_truth[vol_id], y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
 
 
-            # Update.
+            # # Update.
             self.last_nmse[vol_id] = nmse_val
             self.last_psnr[vol_id] = psnr_val
             self.last_ssim[vol_id] = ssim_val
-
-    def _plot_info(
-        self, data_1, data_2, data_3, cste_1, cste_2, title_1, title_2, epoch_idx, tag
-    ):
-        fig = plt.figure(figsize=(30, 10))
-        epsilon = 1.e-45
-        plt.subplot(1, 2, 1)
-        # plt.imshow(np.log((data_1 / cste_1) + epsilon))
-        plt.imshow(data_1 / cste_1)
-        plt.colorbar()
-        plt.title(f"{title_1} kspace")
+        
+    @torch.no_grad()
+    def _plot_3subplots(
+        self, data_1, title1, data_2, title2, data_3, title3, slice_id, epoch_idx, tag, map
+        ):
+        fig = plt.figure(figsize=(20,30))
+        plt.subplot(1,3,1)
+        plt.imshow(data_1[slice_id], cmap=map)
+        plt.title(title1)
         plt.axis('off')
-
-        plt.subplot(1, 2, 2)
-        # plt.imshow(np.log((data_3 /cste_1) + epsilon))
-        plt.imshow(data_3 / cste_2)
-        plt.colorbar()
+        
+        plt.subplot(1,3,2)
+        plt.imshow(data_2[slice_id], cmap=map)
+        plt.title(title2)
         plt.axis('off')
-
-        plt.title(f"Raw kspace")
-
-        self.writer.add_figure(tag, fig, global_step=epoch_idx)
+        
+        plt.subplot(1,3,3)                
+        plt.imshow(data_3[slice_id], cmap=map)
+        plt.title(title3)
+        plt.axis('off')
+        
+            
+        self.writer.add_figure(
+            tag,
+            fig,
+            global_step=epoch_idx,
+        )
         plt.close(fig)
         
-    
+    @torch.no_grad()
+    def _plot_2subplots(
+        self, data_1, title1, data_2, title2, slice_id, epoch_idx, tag, map
+        ):
+        fig = plt.figure(figsize=(20,20))
+        plt.subplot(1,2,1)
+        plt.imshow(data_1[slice_id], cmap=map)
+        plt.title(title1)
+        plt.axis('off')
         
+        plt.subplot(1,2,2)
+        plt.imshow(data_2[slice_id], cmap=map)
+        plt.title(title2)
+        plt.axis('off')
+            
+        self.writer.add_figure(
+            tag,
+            fig,
+            global_step=epoch_idx,
+        )
+        plt.close(fig)
+    
     @torch.no_grad()
     def _log_coil_embeddings(
         self, epoch_idx, tag

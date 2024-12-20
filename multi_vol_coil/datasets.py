@@ -127,6 +127,7 @@ class KCoordDataset(Dataset):
             center_vals = tensor_to_complex_np(
                 volume_kspace[..., left_idx:right_idx, :]
             )
+            
             # Constant (used in '_plot_info' method).
             plot_cste = quant_mod
 

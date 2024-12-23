@@ -1,0 +1,90 @@
+seed: 7
+
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs/12_11/ # TODO: SET.
+
+# model_checkpoint: path_to_checkpoint/epoch_1999.pt  # TODO: SET (OR LEAVE COMMENTED).
+
+dataset:
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
+  n_slices: 3
+  with_mask: True
+  mask_type: Random
+  acceleration: 4
+  center_frac: 0.15
+
+dataset_full:
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
+  n_slices: 3
+  with_mask: False
+  center_frac: 0.15
+
+dataloader:
+  batch_size: 120_000
+  pin_memory: False
+  
+model:
+  id: SirenHash
+  params:
+    hidden_dim: 512
+    levels: 5
+    n_min: 45
+    size_hashtable: 12
+    n_layers: 6
+
+loss:
+  id: MSE
+  params:
+    gamma: 1 # Scalar value that gets multiplied to the real loss value
+
+optimizer:
+  id: Adam
+  params:
+    lr: 5.e-5 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
+    # weight_decay: 0.1
+
+scheduler:
+  id: StepLR
+  params:
+    gamma: 0.1
+    step_size: 20_000
+
+# Training Process
+n_epochs: 2000
+log_interval: 100
+checkpoint_interval: 2000
+
+l_pisco:
+  addpisco: False
+  # addpisco: False
+  E_epoch: 1200
+  alpha: 1.e-6 # Regularizer for the W
+  factor: 0.01 # How much the Lpisco loss gets weighted
+  minibatch: 2000
+  patch_size: 9
+
+###################################################
+# INFORMATION ONLY - NO EFFECT ON RUN
+###################################################
+# The following section is for documentation purposes only.
+# It does not affect the actual behavior of the run.
+# These values are used solely for Tensorboard output, to help identify run types.
+hparam_info:
+  # dataset: "undersampled (except center)"
+  dataset: "all data (except center)"
+
+  # observation_type: "train sample"
+  observation_type: "test sample"
+
+  # regularization: "None"
+  # regularization: "layer norm"
+  # regularization: "weight norm"
+  # regularization: "AdamW (weight decay)"
+
+  coord_encoding: "positional encoding L=15"
+  # coord_encoding: "fourier_feat"
+
+  # normalization: "None"
+  normalization: "divide by .999 abs quantile"
+  # normalization: "divide by max modulus"
+  # normalization: ".05 / .95 real and imag parts"
+  # normalization: "min/max real and imag parts"

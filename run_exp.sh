@@ -3,7 +3,7 @@
 #SBATCH  --gres=gpu:1
 #SBATCH  --cpus-per-task=4
 ### SBATCH  --constraint='titan_xp'
-#SBATCH  --mem=50G
+##SBATCH  --mem=50G
 
 
 source /scratch_net/ken/mcrespo/conda/etc/profile.d/conda.sh # TODO: SET.

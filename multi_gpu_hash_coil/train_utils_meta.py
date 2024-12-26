@@ -87,8 +87,8 @@ class Trainer:
                         hf["reconstruction_rss"][()][: config["dataset"]["n_slices"]]
                     )
                     self.kspace_gt.append(
-                        tensor_to_complex_np(to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
-                    )))
+                        to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
+                    ))
                     )
 
             # Scientific and nuissance hyperparameters.
@@ -123,10 +123,6 @@ class Trainer:
             self.dataloader.sampler.set_epoch(epoch_idx)
             empirical_risk = self._run_epoch()
             
-            # print("No meta initialization")
-            # if (epoch_idx + 1) % self.meta_reinitialization == 0:
-            #     self._reptile_initialization()
-                
             if self.device == 0:
                 print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
                 self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
@@ -158,8 +154,8 @@ class Trainer:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
             # Get the index for the coil latent embedding
-            coords = inputs[:, 1:-1] #kx, ky, kz
-            vol_ids = inputs[:,0].long()
+            coords = inputs[:, :-1] #volID, kx, ky, kz
+            vol_ids = inputs[:,0].long() # Volume index
             coil_ids = inputs[:,-1].long() 
             
             latent_vol = self.embeddings_vol(vol_ids)
@@ -182,26 +178,6 @@ class Trainer:
         avg_loss = avg_loss / n_obs
         return avg_loss
 
-    def _syncronize_update(self):
-        broadcast(self.phi_vol, src=0) 
-        broadcast(self.phi_coil, src = 0)
-
-    def _reptile_initialization(self):
-        phi_vol_bar = self.embeddings_vol.module.weight.mean(dim=0)
-        phi_coil_bar = self.embeddings_coil.module.weight.mean(dim=0)
-        
-        self.phi_vol += self.epsilon_meta*(phi_vol_bar - self.phi_vol)
-        self.phi_coil += self.epsilon_meta*(phi_coil_bar - self.phi_coil)
-        
-        self.embeddings_vol.module.weight.data.copy_(self.phi_vol)
-        self.embeddings_coil.module.weight.data.copy_(self.phi_coil)
-        
-        # Update the optimizer to use the new embeddings
-        self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
-            chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
-            **self.config["optimizer"]["params"],
-        ) 
-        # self._syncronize_update()
 
     ###########################################################################
     ###########################################################################
@@ -275,7 +251,6 @@ class Trainer:
     ###########################################################################
     ###########################################################################
     ###########################################################################
-
     @torch.no_grad() 
     def _log_performance(self, epoch_idx):
         for vol_id in self.dataloader.dataset.metadata.keys():
@@ -289,69 +264,65 @@ class Trainer:
             )
 
             volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
-            
-            mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1)
-            predicted_mask = 1-mask.expand(shape).numpy()
-            acquired_mask= mask.expand(shape).numpy()
-            
-            raw_kspace = self.kspace_gt[vol_id]
-            log_title = 'Predicted'
-            raw_kspace[..., left_idx:right_idx] = 0
-            # volume_kspace = volume_kspace*(predicted_mask) + self.kspace_gt[vol_id]*(acquired_mask)
-            # raw_kspace = self.kspace_gt[vol_id]*(acquired_mask)  
-            # raw_kspace[..., left_idx:right_idx] = center_vals
-            # log_title = 'Acquired + Predicted'
-            
-            # if self.config["runtype"] == "test":
-            #     volume_kspace = volume_kspace*(predicted_mask) + self.kspace_gt[vol_id]*(acquired_mask)
-            #     raw_kspace = self.kspace_gt[vol_id]*(acquired_mask)  
-            #     raw_kspace[..., left_idx:right_idx] = center_vals
-            #     log_title = 'Acquired + Predicted'
-            
-            # else:
-            #     raw_kspace = self.kspace_gt[vol_id]
-            #     log_title = 'Predicted'
-            
-            
-            volume_img = rss(inverse_fft2_shift(volume_kspace))
-            raw_volume_img = rss(inverse_fft2_shift(raw_kspace))
-            
-            
-            volume_kspace = rss(volume_kspace)
-            raw_kspace = rss(raw_kspace)
-            # volume_kspace = fft2_shift(volume_img)
-            # raw_kspace = fft2_shift(raw_volume_img)
-            
-            ##################################################
-            # Log kspace values.
-            ##################################################
-            # Plot modulus and argument.
-            modulus = np.abs(volume_kspace)
-            raw_modulus = np.abs(raw_kspace)
-            cste_mod = self.dataloader.dataset.metadata[vol_id]["plot_cste"]
-
-            argument = np.angle(volume_kspace)
+            cste_mod = self.dataloader.dataset.metadata[vol_id]["norm_cste"]
             cste_arg = np.pi / 180
+            
+            y_kspace_data = tensor_to_complex_np(self.kspace_gt[vol_id])
+            
+            mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
 
-            ##################################################
-            # Log image space values
-            ##################################################
-            volume_img = np.abs(volume_img)
-            raw_volume_img = np.abs(raw_volume_img)
+            y_kspace_data_u = y_kspace_data  * (mask)
+            y_kspace_prediction_u = volume_kspace * (1-mask)
+            y_kspace_final = y_kspace_data_u + y_kspace_prediction_u
+
+            y_kspace_data_rss = rss(y_kspace_data_u)
+            y_kspace_prediction_rss = rss(y_kspace_prediction_u)
+            y_kspace_final_rss = rss(y_kspace_final)
+            
+            y_kspace_final[..., left_idx:right_idx] = center_vals
+            y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
+            y_kspace_final_wcenter_rss = rss(y_kspace_final)
+            
+            ###### predict the edges - image
+            y_img_edges = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            
+            ###### predict the center - image
+            volume_kspace[..., left_idx:right_idx] = center_vals
+            y_img_edges_center = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            volume_kspace_rss = rss(volume_kspace)
+            
+            ###### raw img w/o 
+            y_kspace_data[..., left_idx:right_idx] = 0
+            raw_img_edges = np.abs(rss(inverse_fft2_shift(y_kspace_data)))
+            
 
             for slice_id in range(shape[0]):
-                self._plot_info(
-                    modulus[slice_id],
-                    argument[slice_id],
-                    raw_modulus[slice_id],
-                    cste_mod,
-                    cste_arg,
-                    "Modulus",
-                    "Argument",
-                    epoch_idx,
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/kspace_v1")
-                    
+                self._plot_3subplots(y_img_edges, 'Edges',
+                                    y_img_edges_center, 'Edges + centre',
+                                    y_img_final, 'Edges + centre + acquisitions', 
+                                    slice_id, 
+                                    epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img",
+                                    'gray')
+
+                self._plot_3subplots(np.abs(y_kspace_data_rss/cste_mod), 'M · ydata',
+                                    np.abs(y_kspace_prediction_rss/cste_mod), '(1-M) · ypred', 
+                                    np.abs(y_kspace_final_rss/cste_mod), 'M · ydata + (1-M)·ypred',
+                                    slice_id, epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace composition",
+                                    'viridis')
+
+                self._plot_2subplots(self.ground_truth[vol_id], 'groundtruth vol',
+                                    raw_img_edges, 'groundtruth edges', 
+                                    slice_id, epoch_idx, 
+                                    f"groundtruth/vol_{vol_id}_slice_{slice_id}", 'gray')
                 
+                self._plot_2subplots(np.log(volume_kspace_rss/cste_mod + 1.e-45), 'kspace predicted',
+                                    np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
+                                    slice_id, epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
+            
+            
                 # Plot 4 coils image
                 fig = plt.figure(figsize=(20, 10))
                 
@@ -368,52 +339,99 @@ class Trainer:
                 plt.close(fig)
                 
                 
-                # Plot image.
-                fig = plt.figure(figsize=(20, 10))
-                plt.subplot(1,2,1)
-                plt.imshow(volume_img[slice_id], cmap='gray')
-                plt.axis('off')
-                plt.title(log_title)
-                plt.subplot(1,2,2)
-                plt.imshow(raw_volume_img[slice_id], cmap='gray')
-                plt.axis('off')
-                plt.title('Raw')
-                self.writer.add_figure(
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/volume_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
-                
-                
-            self._log_hash_embeddings(epoch_idx, f"embeddings/hash")
+
             self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
 
+            ############################################################
             # Log evaluation metrics.
-            nmse_val = nmse(raw_volume_img, volume_img)
-            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse", nmse_val, epoch_idx)
+            nmse_val = nmse(raw_img_edges, y_img_edges)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_edges", nmse_val, epoch_idx)
 
-            psnr_val = psnr(raw_volume_img, volume_img)
-            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr", psnr_val, epoch_idx)
+            psnr_val = psnr(raw_img_edges, y_img_edges)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_edges", psnr_val, epoch_idx)
 
-            ssim_val = ssim(raw_volume_img, volume_img)
-            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim", ssim_val, epoch_idx)
+            ssim_val = ssim(raw_img_edges, y_img_edges)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_edges", ssim_val, epoch_idx)
             
-            # # Comparison metrics for the raw image and the groundtruth
-            # raw_nmse_val = nmse(self.ground_truth[vol_id], raw_volume_img)
-            # self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_raw", raw_nmse_val, epoch_idx)
+            # ############################################################
+            # # # Comparison metrics for the volume image w center and the groundtruth
+            nmse_val = nmse(self.ground_truth[vol_id], y_img_edges_center)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_wcenter", nmse_val, epoch_idx)
 
-            # raw_psnr_val = psnr(self.ground_truth[vol_id], raw_volume_img)
-            # self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_raw", raw_psnr_val, epoch_idx)
+            psnr_val = psnr(self.ground_truth[vol_id], y_img_edges_center)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_wcenter", psnr_val, epoch_idx)
 
-            # raw_ssim_val = ssim(self.ground_truth[vol_id], raw_volume_img)
-            # self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_raw", raw_ssim_val, epoch_idx)
+            ssim_val = ssim(self.ground_truth[vol_id], y_img_edges_center)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
+
+            # ############################################################
+            # # Comparison metrics for the volume image w center + predictions and the groundtruth
+            nmse_val = nmse(self.ground_truth[vol_id], y_img_final)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_acq_pred", nmse_val, epoch_idx)
+
+            psnr_val = psnr(self.ground_truth[vol_id], y_img_final)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_acq_pred", psnr_val, epoch_idx)
+
+            ssim_val = ssim(self.ground_truth[vol_id], y_img_final)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
 
             # Update.
             self.last_nmse[vol_id] = nmse_val
             self.last_psnr[vol_id] = psnr_val
             self.last_ssim[vol_id] = ssim_val
+            
+    
+    @torch.no_grad()
+    def _plot_3subplots(
+        self, data_1, title1, data_2, title2, data_3, title3, slice_id, epoch_idx, tag, map
+        ):
+        fig = plt.figure(figsize=(20,30))
+        plt.subplot(1,3,1)
+        plt.imshow(data_1[slice_id], cmap=map)
+        plt.title(title1)
+        plt.axis('off')
+        
+        plt.subplot(1,3,2)
+        plt.imshow(data_2[slice_id], cmap=map)
+        plt.title(title2)
+        plt.axis('off')
+        
+        plt.subplot(1,3,3)                
+        plt.imshow(data_3[slice_id], cmap=map)
+        plt.title(title3)
+        plt.axis('off')
+        
+            
+        self.writer.add_figure(
+            tag,
+            fig,
+            global_step=epoch_idx,
+        )
+        plt.close(fig)
 
+        
+    @torch.no_grad()
+    def _plot_2subplots(
+        self, data_1, title1, data_2, title2, slice_id, epoch_idx, tag, map
+        ):
+        fig = plt.figure(figsize=(20,20))
+        plt.subplot(1,2,1)
+        plt.imshow(data_1[slice_id], cmap=map)
+        plt.title(title1)
+        plt.axis('off')
+        
+        plt.subplot(1,2,2)
+        plt.imshow(data_2[slice_id], cmap=map)
+        plt.title(title2)
+        plt.axis('off')
+            
+        self.writer.add_figure(
+            tag,
+            fig,
+            global_step=epoch_idx,
+        )
+        plt.close(fig)
+        
     @torch.no_grad()
     def _log_coil_embeddings(
         self, epoch_idx, tag
@@ -439,97 +457,7 @@ class Trainer:
         plt.tight_layout()
         self.writer.add_figure(tag, fig, global_step=epoch_idx)
         plt.close(fig)
-
-    @ torch.no_grad()
-    def _log_hash_embeddings(
-        self, epoch_idx, tag
         
-    ):
-        fig = plt.figure(figsize=(self.n_levels_hash*6,12))
-
-        for i, level in enumerate(self.model.module.embed_fn.parameters()):
-            box_embedd = level.detach().cpu()
-            plt.subplot(self.n_levels_hash,1,i+1)
-            plt.title(f"Level: {i+1}")
-            plt.hist(box_embedd.flatten(), bins = 100)
-            if i != self.n_levels_hash - 1:
-                plt.xticks([])
-        plt.suptitle('Hash', fontsize=30)
-        plt.tight_layout()
-        self.writer.add_figure(tag, fig, global_step=epoch_idx)
-        plt.close(fig)
-        
-
-        
-    def _plot_info(
-        self, data_1, data_2, data_3, cste_1, cste_2, title_1, title_2, epoch_idx, tag
-    ):
-        fig = plt.figure(figsize=(30, 10))
-        epsilon = 1.e-45
-        plt.subplot(1, 2, 1)
-        # plt.imshow(np.log((data_1 / cste_1) + epsilon))
-        plt.imshow(data_1 / cste_1)
-        plt.colorbar()
-        plt.title(f"{title_1} kspace")
-        plt.axis('off')
-
-        # plt.subplot(1, 3, 2)
-        # plt.hist(data_1.flatten(), log=True, bins=100)
-
-        # max_val = np.max(data_1)
-        # min_val = np.min(data_1)
-        # # ignoring zero data
-        # non_zero = data_1 > 0
-        # mean = np.mean(data_1[non_zero])
-        # median = np.median(data_1[non_zero])
-        # q05 = np.quantile(data_1[non_zero], 0.05)
-        # q95 = np.quantile(data_1[non_zero], 0.95)
-
-        # plt.axvline(
-        #     mean, color="r", linestyle="dashed", linewidth=2, label=f"Mean: {mean:.2e}"
-        # )
-        # plt.axvline(
-        #     median,
-        #     color="g",
-        #     linestyle="dashed",
-        #     linewidth=2,
-        #     label=f"Median: {median:.2e}",
-        # )
-        # plt.axvline(
-        #     q05, color="b", linestyle="dotted", linewidth=2, label=f"Q05: {q05:.2e}"
-        # )
-        # plt.axvline(
-        #     q95, color="b", linestyle="dotted", linewidth=2, label=f"Q95: {q95:.2e}"
-        # )
-        # plt.axvline(
-        #     min_val,
-        #     color="orange",
-        #     linestyle="solid",
-        #     linewidth=2,
-        #     label=f"Min: {min_val:.2e}",
-        # )
-        # plt.axvline(
-        #     max_val,
-        #     color="purple",
-        #     linestyle="solid",
-        #     linewidth=2,
-        #     label=f"Max: {max_val:.2e}",
-        # )
-        # plt.legend()
-        # plt.title(f"{title_1} histogram")
-
-        plt.subplot(1, 2, 2)
-        # plt.imshow(np.log((data_3 /cste_1) + epsilon))
-        plt.imshow(data_3 /cste_1)
-        plt.colorbar()
-        plt.axis('off')
-
-        plt.title(f"Raw kspace")
-
-        self.writer.add_figure(tag, fig, global_step=epoch_idx)
-        plt.close(fig)
-        
-
     @torch.no_grad()
     def _log_weight_info(self, epoch_idx):
         """Log weight values and gradients."""

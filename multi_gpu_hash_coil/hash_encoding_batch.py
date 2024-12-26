@@ -6,7 +6,7 @@ class hash_encoder(nn.Module):
     """
     Class that computes the encoding for a batch of points, based on concatenation of bounding box embeddings at different resolution levels L.
     """
-    def __init__(self, levels=10, log2_hashmap_size=12, n_features_per_level=2, n_max=320, n_min=16):
+    def __init__(self, levels=10, log2_hashmap_size=12, n_features_per_level=2, n_max=320, n_min=16, n_volumes = 5):
         super(hash_encoder, self).__init__()
         self.l_max = levels
         self.log2_hashmap_size = log2_hashmap_size
@@ -14,11 +14,12 @@ class hash_encoder(nn.Module):
         self.n_max = n_max
         self.n_min = n_min
         self.b = np.exp((np.log(self.n_max) - np.log(self.n_min)) / (self.l_max - 1))
+        self.n_volumes = n_volumes
 
-        # Initialize embeddings for each level
-        self.embeddings = nn.ModuleList([
-            nn.Embedding(self._get_number_of_embeddings(i), self.n_features_per_level)
-            for i in range(self.l_max)
+        self.vol_embeddings = nn.ModuleList([
+            nn.ModuleList([
+                nn.Embedding(self._get_number_of_embeddings(i), self.n_features_per_level) for i in range(levels)
+            ]) for _ in range(n_volumes)
         ])
         
     
@@ -28,7 +29,7 @@ class hash_encoder(nn.Module):
         n_l_embeddings = (n_l + 5) ** 2
         return min(max_size, n_l_embeddings)
 
-    def bilinear_interp(self, x: torch.Tensor, box_indices: torch.Tensor, box_embedds: torch.Tensor) -> torch.Tensor:
+    def _bilinear_interp(self, x: torch.Tensor, box_indices: torch.Tensor, box_embedds: torch.Tensor) -> torch.Tensor:
         device = x.device
         
         if box_indices.shape[1] > 2:
@@ -129,28 +130,57 @@ class hash_encoder(nn.Module):
         return xor_result & hash_mask
     
     
-    def forward(self, points: torch.Tensor) -> torch.Tensor:
-        # Process a batch of points
-        self.device = points.device
+    # def forward(self, points: torch.Tensor) -> torch.Tensor:
+    #     # Process a batch of points
+    #     self.device = points.device
         
-        xy_embedded_all = []
-        xy = points[:,:2]
+    #     xy_embedded_all = []
+    #     xy = points[:,:2]
         
-        for i in range(self.l_max):
-            n_l = int(self.n_min * self.b ** i)
+    #     for i in range(self.l_max):
+    #         n_l = int(self.n_min * self.b ** i)
             
-            box_idx, hashed_box_idx = self._get_box_idx(xy, n_l)
+    #         box_idx, hashed_box_idx = self._get_box_idx(xy, n_l)
             
-            box_embedds = self.embeddings[i](hashed_box_idx)
+    #         box_embedds = self.embeddings[i](hashed_box_idx)
             
-            xy_embedded = self.bilinear_interp(xy, box_idx, box_embedds)
-            xy_embedded_all.append(xy_embedded)
+    #         xy_embedded = self.bilinear_interp(xy, box_idx, box_embedds)
+    #         xy_embedded_all.append(xy_embedded)
             
             
-        xy_embeddings_all = torch.cat(xy_embedded_all, dim=1)
-        full_embedding = torch.cat((xy_embeddings_all, points[:,2].unsqueeze(-1)), dim=1)
-        return full_embedding
+    #     xy_embeddings_all = torch.cat(xy_embedded_all, dim=1)
+    #     full_embedding = torch.cat((xy_embeddings_all, points[:,2].unsqueeze(-1)), dim=1)
+    #     return full_embedding
     
+    
+    def forward(self, points: torch.Tensor) -> torch.Tensor:
+        self.device = points.device
+        hash_feature_size = self.n_features_per_level * self.l_max + 1 # 16
+        model_input = torch.zeros(points.shape[0], hash_feature_size, device=self.device) #final input to the model after computing the embeddings
+        for vol in range(self.n_volumes): # do this per volume, identify all points in batch from same vol
+            # mask the points in that volume
+            mask_vol = (points[:,0] == vol) 
+            reduced_batch = points[mask_vol] 
+            
+            # select the x,y coordinates to perform the hash encoding
+            xy = reduced_batch[:,1:-1]
+            xy_embedded_all = []
+            
+            for i in range(self.l_max):
+                n_l = int(self.n_min * self.b ** i)
+                
+                box_indices, hashed_box_idx = self._get_box_idx(xy, n_l)
+                box_embedds = self.vol_embeddings[vol][i](hashed_box_idx)
+                    
+                xy_embedded = self._bilinear_interp(xy, box_indices, box_embedds)
+                xy_embedded_all.append(xy_embedded)
+                
+            xy_embeddings_all = torch.cat(xy_embedded_all, dim=1)
+            full_embedding = torch.cat((xy_embeddings_all, reduced_batch[:,3].unsqueeze(-1)), dim=1)
+            
+            model_input[mask_vol] = full_embedding
+    
+        return model_input
     
     def __call__(self, point_coors: torch.Tensor) -> torch.Tensor:
         return self.forward(point_coors)

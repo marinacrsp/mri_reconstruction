@@ -18,7 +18,6 @@ from torch.utils.data import DataLoader
 MODEL_CLASSES = {
     "Siren0": Siren_skip,
     # "Siren3.0": Siren_skip_emb,
-    "SirenHash": Siren_skip_hash
 }
 
 LOSS_CLASSES = {

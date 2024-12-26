@@ -92,13 +92,14 @@ def get_grappa_matrixes (inputs, shape, patch_size, normalized: bool):
 
     n_slices, n_coils, height, width = shape
     norm_cte = [width, height, n_slices, n_coils]
-    if normalized == False:
-        k_coors = inputs
-    else:
+
+    if normalized: # One needs to denormalize
         k_coors = torch.zeros((inputs.shape[0], 4), dtype=torch.int)
         for idx in range(len(shape)):
-            k_coors[:,idx] = denormalize_fn(inputs[:,idx], norm_cte[idx])
-
+            k_coors[...,idx] = denormalize_fn(inputs[...,idx], norm_cte[idx])
+    else:
+        k_coors = inputs
+        
     # Remove the edges from the target coordinates
     leftmost_vedge = (k_coors[:, 1] == 0)
     rightmost_vedge = (k_coors[:, 1] == 319)

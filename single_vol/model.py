@@ -1,5 +1,4 @@
 import math
-from hash_encoding_batch import *
 import numpy as np
 import torch
 from torch import nn
@@ -20,85 +19,6 @@ class coor_embedding(nn.Module):
         ky_embedded = self.y_embedding(coors_kspace[:,1].long()) 
         coord_features = torch.cat((torch.cat((kx_embedded, ky_embedded), dim=1), coors_kspace[:,2:]), dim = 1 )
         return coord_features, self.x_embedding.weight, self.y_embedding.weight
-    
-class Siren_skip_hash(nn.Module):
-    def __init__(
-        self,
-        hidden_dim=512,
-        levels = 10,
-        n_min=16,
-        size_hashtable = 12,
-        n_layers=4,
-        out_dim=2,
-        omega_0=30,
-        dropout_rate=0.20,
-    ) -> None:
-        super().__init__()        
-                
-        # Layer containing trainable parameters for the embedding
-        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=2, n_max=320, n_min=n_min)
-        coor_embedd_dim = levels*2 + 2
-                
-        # First set of layers (before the first skip connection)
-        self.sinelayers = nn.ModuleList([SineLayer_hash(coor_embedd_dim, hidden_dim, is_first=True, omega_0=omega_0)])
-        for layer_idx in range(n_layers-1):
-            if layer_idx == n_layers//2 - 1:
-                self.sinelayers.append(SineLayer_hash(hidden_dim + coor_embedd_dim, hidden_dim, is_first=False, omega_0=omega_0))
-                self.res_connection = layer_idx + 1
-            else:
-                self.sinelayers.append(SineLayer_hash(hidden_dim, hidden_dim, is_first=False, omega_0=omega_0))
-
-        self.sinelayers = nn.ModuleList(self.sinelayers)
-        
-        self.output_layer = nn.Linear(hidden_dim, out_dim)
-        with torch.no_grad():
-            self.output_layer.weight.uniform_(
-                -np.sqrt(6 / hidden_dim) / omega_0, np.sqrt(6 / hidden_dim) / omega_0
-            )
-                
-    def forward(self, coords):
-        h0 = self.embed_fn(coords)
-        # First set of layers
-        h1 = h0.clone()
-                
-        for layer_idx, layer in enumerate (self.sinelayers):
-            if layer_idx == self.res_connection:
-                h1 = torch.cat([h1, h0], dim=-1)
-            h1 = layer(h1)
-        return self.output_layer(h1)
-
-
-class SineLayer_hash(nn.Module):
-    """Linear layer with sine activation. Adapted from Siren repo"""
-
-    def __init__(
-        self, in_features, out_features, bias=True, is_first=False, omega_0=30
-    ):
-        super().__init__()
-        self.omega_0 = omega_0
-        self.is_first = is_first
-        self.in_features = in_features
-
-        self.linear = nn.Linear(in_features, out_features, bias=bias)
-
-        with torch.no_grad():
-            if self.is_first:
-                self.linear.weight.uniform_(-1 / self.in_features, 1 / self.in_features)
-            else:
-                self.linear.weight.uniform_(
-                    -np.sqrt(6 / self.in_features) / self.omega_0,
-                    np.sqrt(6 / self.in_features) / self.omega_0,
-                )
-
-    def forward(self, x):
-        # NOTE: Uncomment when using batch (or layer) normalization.
-        # x = self.linear(x)
-        # x = self.layer_norm(x)
-        # x = self.batch_norm(x)
-        # return torch.sin(self.omega_0 * x)
-
-        return torch.sin(self.omega_0 * self.linear(x))
-
 
 
 class Siren_skip_emb(nn.Module):

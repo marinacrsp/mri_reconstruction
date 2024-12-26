@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from data_utils import *
-from fastmri.data.transforms import tensor_to_complex_np
+from fastmri.data.transforms import tensor_to_complex_np, to_tensor
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from torch.utils.data import DataLoader, TensorDataset
 from pisco import *
@@ -57,6 +57,8 @@ class Trainer:
             self.ground_truth = hf["reconstruction_rss"][()][
                 : config["dataset"]["n_slices"]
             ]
+            self.kspace_gt = to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]))
+
 
         # Scientific and nuissance hyperparameters.
         self.hparam_info = config["hparam_info"]
@@ -86,14 +88,6 @@ class Trainer:
             
             print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
             
-            ### If there is Pisco regularization
-            if (epoch_idx + 1) >= self.E_epoch:
-                if self.add_pisco == True:
-                    empirical_pisco, epoch_res1, epoch_res2, self.batch_grappas = self._train_with_Lpisco()
-                    print(f"EPOCH {epoch_idx}  Pisco loss: {empirical_pisco}\n")
-                    self.writer.add_scalar("Residuals/Linear", epoch_res1, epoch_idx)
-                    self.writer.add_scalar("Residuals/Regularizer", epoch_res2, epoch_idx)
-                        
             # Log the errors
             self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
             self.writer.add_scalar("Loss/Pisco", empirical_pisco, epoch_idx)
@@ -140,89 +134,9 @@ class Trainer:
         avg_loss = avg_loss / n_obs
         return avg_loss
     
-    
-    def _train_with_Lpisco (self):
-        self.model.train()
-        vol_id = 0
-        n_obs = 0
-        shape = self.dataloader_pisco.dataset.metadata[vol_id]["shape"]
-        _, n_coils, _, _ = shape
-        
-        batch_grappa = []
-        err_pisco = 0
-        res1 = 0
-        res2 = 0
-        for inputs, _ in self.dataloader_pisco:
-            
-            #### Compute grid 
-            t_coordinates, patch_coordinates, Nn = get_grappa_matrixes(inputs, shape, patch_size=self.patch_size, normalized=True)
-            
-            # Estimate the minibatch list of Ws together with the averaged residuals of the minibatch 
-            ws, ws_nograd, batch_r1, batch_r2 = self.predict_ws(t_coordinates, patch_coordinates, n_coils, Nn)
-                        
-            # Compute the pisco loss
-            batch_Lp = L_pisco(ws) * self.factor
-            
-            assert batch_Lp.requires_grad, "batch_Lp does not require gradients."
-        
-            # Update the model based on the Lpisco loss
-            batch_Lp.backward()
-        
-            self.optimizer.step()
-
-            # Compute the mean_batch_grappa_matrix
-            w_grappa = np.mean(ws_nograd, axis = 0)
-            batch_grappa.append(w_grappa)
-
-            err_pisco += batch_Lp.item()
-            res1 += batch_r1
-            res2 += batch_r2
-            n_obs += 1
-            
-        return err_pisco/n_obs, res1/n_obs, res2/n_obs, batch_grappa
-
     ##########################################################################
     ##########################################################################
     ##########################################################################
-    
-    def predict_ws (self, t_coordinates, patch_coordinates, n_coils, Nn):
-        
-        t_predicted = torch.zeros((t_coordinates.shape[0], n_coils), dtype=torch.complex64)
-        t_coordinates, patch_coordinates = t_coordinates.to(self.device), patch_coordinates.to(self.device)
-        
-        # nxn Neighbourhood patch surrounding the target point
-        neighborhood_corners = torch.zeros((t_coordinates.shape[0], Nn, n_coils), dtype=torch.complex64)
-
-        for idx in range(n_coils):
-            t_predicted[:, idx] = torch.view_as_complex(self.model(t_coordinates[:, idx, :]))
-            for nn in range(Nn):
-                neighborhood_corners[:, nn, idx] = torch.view_as_complex(self.model(patch_coordinates[:, nn, idx, :])).detach()
-        
-        ##### Estimate the Ws for a random subset of values
-        T_s, Ns = split_batch(t_predicted, self.minibatch)
-        P_s, _ = split_batch(neighborhood_corners, self.minibatch)
-        
-        # Estimate the Weight matrixes
-        Ws = []
-        Ws_nograd = []
-        elem1 = 0
-        elem2 = 0
-        
-        for i, t_s in enumerate(T_s):
-            p_s = P_s[i]
-            p_s = torch.flatten(p_s, start_dim=1)
-            
-            ws, res1, res2 = compute_Lsquares(p_s, t_s, self.alpha)
-            Ws.append(ws)
-            
-            ws_nograd = ws.detach()
-            Ws_nograd.append(ws_nograd)
-            
-            # Compute an average of the residual terms
-            elem1 += res1
-            elem2 += res2
-
-        return Ws, Ws_nograd, elem1/Ns, elem2/Ns
     
     @torch.no_grad()
     def predict(self, vol_id, shape, left_idx, right_idx, center_vals, epoch_idx):
@@ -276,256 +190,191 @@ class Trainer:
 
         volume_kspace = tensor_to_complex_np(volume_kspace.detach().cpu())
 
-        # "Fill-in" center values.
-        volume_kspace[..., left_idx:right_idx] = center_vals #NOTE Shape of volume kspace is [n_coils, n_slices, height, width, 2] it's not in complex form
-        
-        ### Compute the result of Grappa interpolation from the computed volume
-        volume_img = rss(inverse_fft2_shift(volume_kspace))
-        
-        if self.add_pisco == True and (epoch_idx + 1) >= self.E_epoch:
-            grappa_volume = torch.zeros(shape, dtype = torch.complex64)
-
-            # If it is a checkpoint, recalculate the grappa volume
-            w_grappa = torch.tensor(np.mean(self.batch_grappas, axis=0))
-                
-            # Now predict the sensitivities (accuracy of the Ws grappa matrixes)
-            for points_ids in dataloader:
-                points_ids = points_ids[0]
-                t_coors, nn_coors, Nn = get_grappa_matrixes(points_ids, shape, patch_size=self.patch_size, normalized=False)
-                
-                nt_coors = torch.zeros((t_coors.shape), dtype=torch.int)
-                nt_coors[...,:2] = t_coors[...,:2]
-                nt_coors[...,2] = (denormalize_fn(t_coors[...,2], n_slices))
-                nt_coors[...,3] = (denormalize_fn(t_coors[...,3], n_coils))
-                
-                nnn_coors = torch.zeros((nn_coors.shape), dtype=torch.int)
-                nnn_coors[...,:2] = nn_coors[...,:2]
-                nnn_coors[...,2] = (denormalize_fn(nn_coors[...,2], n_slices))
-                nnn_coors[...,3] = (denormalize_fn(nn_coors[...,3], n_coils))
-                
-                neighbor_kspacevals = torch.tensor(volume_kspace[nnn_coors[...,2], nnn_coors[...,3], nnn_coors[...,1], nnn_coors[...,0]])
-                neighbor_kspacevals = neighbor_kspacevals.reshape((t_coors.shape[0], Nn, n_coils))
-                ps_kspacevals = neighbor_kspacevals.view(t_coors.shape[0], Nn*n_coils)
-                t_kspacevals = torch.matmul(ps_kspacevals, w_grappa)  # NOTE : Computed value based on neighbouring patch of 3x3 and estimated grappa mean
-                
-                grappa_volume[nt_coors[...,2], nt_coors[...,3], nt_coors[...,1], nt_coors[...,0]] = t_kspacevals
-                
-            grappa_img =  rss(inverse_fft2_shift((grappa_volume)))   
-            
-        else:
-            grappa_img = []
-            
-
         self.model.train()
-        return volume_img, grappa_img
+        return volume_kspace
 
     ###########################################################################
     ###########################################################################
     ###########################################################################
+
+    @torch.no_grad() 
+    def _log_performance(self, epoch_idx, vol_id = 0):
+            # Predict volume image.
+            
+            shape = self.dataloader_consistency.dataset.metadata[vol_id]["shape"]
+            center_data = self.dataloader_consistency.dataset.metadata[vol_id]["center"]
+            left_idx, right_idx, center_vals = (
+                center_data["left_idx"],
+                center_data["right_idx"],
+                center_data["vals"],
+            )
+
+            volume_kspace = self.predict(vol_id, shape, left_idx, right_idx, center_vals, epoch_idx)
+            cste_mod = self.dataloader_consistency.dataset.metadata[vol_id]["norm_cste"]
+            
+            y_kspace_data = tensor_to_complex_np(self.kspace_gt)
+            
+            mask = self.dataloader_consistency.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
+
+            y_kspace_data_u = y_kspace_data  * (mask)
+            y_kspace_prediction_u = volume_kspace * (1-mask)
+            y_kspace_final = y_kspace_data_u + y_kspace_prediction_u
+
+            y_kspace_data_rss = rss(y_kspace_data_u)
+            y_kspace_prediction_rss = rss(y_kspace_prediction_u)
+            y_kspace_final_rss = rss(y_kspace_final)
+            
+            y_kspace_final[..., left_idx:right_idx] = center_vals
+            y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
+            y_kspace_final_wcenter_rss = rss(y_kspace_final)
+            
+            ###### predict the edges - image
+            y_img_edges = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            
+            ###### predict the center - image
+            volume_kspace[..., left_idx:right_idx] = center_vals
+            y_img_edges_center = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            volume_kspace_rss = rss(volume_kspace)
+            
+            ###### raw img w/o 
+            y_kspace_data[..., left_idx:right_idx] = 0
+            raw_img_edges = np.abs(rss(inverse_fft2_shift(y_kspace_data)))
+            
+
+            for slice_id in range(shape[0]):
+                self._plot_3subplots(y_img_edges, 'Edges',
+                                    y_img_edges_center, 'Edges + centre',
+                                    y_img_final, 'Edges + centre + acquisitions', 
+                                    slice_id, 
+                                    epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img",
+                                    'gray')
+
+                self._plot_3subplots(np.abs(y_kspace_data_rss/cste_mod), 'M · ydata',
+                                    np.abs(y_kspace_prediction_rss/cste_mod), '(1-M) · ypred', 
+                                    np.abs(y_kspace_final_rss/cste_mod), 'M · ydata + (1-M)·ypred',
+                                    slice_id, epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace composition",
+                                    'viridis')
+
+                self._plot_2subplots(self.ground_truth, 'groundtruth vol',
+                                    raw_img_edges, 'groundtruth edges', 
+                                    slice_id, epoch_idx, 
+                                    f"groundtruth/vol_{vol_id}_slice_{slice_id}", 'gray')
+                
+                self._plot_2subplots(np.log(volume_kspace_rss/cste_mod + 1.e-45), 'kspace predicted',
+                                    np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
+                                    slice_id, epoch_idx, 
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
+            
+            
+                # Plot 4 coils image
+                # fig = plt.figure(figsize=(20, 10))
+                
+                # for i in range(4):
+                #     plt.subplot(1,4,i+1)
+                #     plt.imshow(coils_img[slice_id], cmap='gray')
+                #     plt.axis('off')
+                
+                # self.writer.add_figure(
+                #     f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
+                #     fig,
+                #     global_step=epoch_idx,
+                # )
+                # plt.close(fig)
+                
+                
+
+            # self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
+
+            ############################################################
+            # Log evaluation metrics.
+            nmse_val = nmse(raw_img_edges, y_img_edges)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_edges", nmse_val, epoch_idx)
+
+            psnr_val = psnr(raw_img_edges, y_img_edges)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_edges", psnr_val, epoch_idx)
+
+            ssim_val = ssim(raw_img_edges, y_img_edges)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_edges", ssim_val, epoch_idx)
+            
+            # ############################################################
+            # # # Comparison metrics for the volume image w center and the groundtruth
+            nmse_val = nmse(self.ground_truth, y_img_edges_center)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_wcenter", nmse_val, epoch_idx)
+
+            psnr_val = psnr(self.ground_truth, y_img_edges_center)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_wcenter", psnr_val, epoch_idx)
+
+            ssim_val = ssim(self.ground_truth, y_img_edges_center)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
+
+            # ############################################################
+            # # Comparison metrics for the volume image w center + predictions and the groundtruth
+            nmse_val = nmse(self.ground_truth, y_img_final)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_acq_pred", nmse_val, epoch_idx)
+
+            psnr_val = psnr(self.ground_truth, y_img_final)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_acq_pred", psnr_val, epoch_idx)
+
+            ssim_val = ssim(self.ground_truth, y_img_final)
+            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
+
+            # Update.
+            self.last_nmse = nmse_val
+            self.last_psnr = psnr_val
+            self.last_ssim = ssim_val
 
     @torch.no_grad()
-    def _log_performance(self, epoch_idx, vol_id=0):
-        # Predict volume image.
-        shape = self.dataloader_consistency.dataset.metadata[vol_id]["shape"]
-        center_data = self.dataloader_consistency.dataset.metadata[vol_id]["center"]
-        left_idx, right_idx, center_vals = (
-            center_data["left_idx"],
-            center_data["right_idx"],
-            center_data["vals"],
-        )
-
-        volume_img, grappa_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals, epoch_idx)
-        
-        volume_kspace = fft2_shift(volume_img)  # To get "single-coil" k-space.
-        volume_kspace[..., left_idx:right_idx] = 0
-
-        ##################################################
-        # Log kspace values.
-        ##################################################
-        cste_mod = self.dataloader_consistency.dataset.metadata[vol_id]["plot_cste"]
-        cste_arg = np.pi / 180
-        cste_real = self.dataloader_consistency.dataset.metadata[vol_id]["plot_cste"]
-        cste_imag = cste_real
-        
-        # Plot modulus and argument.
-        modulus = np.abs(volume_kspace)
-        argument = np.angle(volume_kspace)
-        
-        # Plot real and imaginary parts.
-        real_part= np.real(volume_kspace)
-        imag_part = np.imag(volume_kspace)
-
-        ##################################################
-        # Log image space values
-        ##################################################
-        volume_img= np.abs(volume_img)
-
-        for slice_id in range(shape[0]):
-            self._plot_info(
-                modulus[slice_id],
-                argument[slice_id],
-                cste_mod,
-                cste_arg,
-                "Modulus",
-                "Argument",
-                epoch_idx,
-                f"prediction/slice_{slice_id}/kspace_v1",
-            )
-            self._plot_info(
-                real_part[slice_id],
-                imag_part[slice_id],
-                cste_real,
-                cste_imag,
-                "Real part",
-                "Imaginary part",
-                epoch_idx,
-                f"prediction/slice_{slice_id}/kspace_v2",
-            )
-
-            # Plot image.
-            fig = plt.figure(figsize=(8, 8))
-            plt.imshow(volume_img[slice_id])
-            plt.axis('off')
-            self.writer.add_figure(
-                f"prediction/slice_{slice_id}/volume_img", fig, global_step=epoch_idx
-            )
-            
-            # Visualize the Grappa volume estimated
-            # Plot image.
-            
-            if self.add_pisco == True and (epoch_idx + 1) >= self.E_epoch:
-                fig = plt.figure(figsize=(8, 8))
-                plt.imshow(grappa_img[slice_id])
-                plt.axis('off')
-                self.writer.add_figure(
-                    f"prediction/slice_{slice_id}/grappa_img_prediction", fig, global_step=epoch_idx
-                )
-                plt.close(fig)
-
-        # Log evaluation metrics.
-        ssim_val = ssim(self.ground_truth, volume_img)
-        self.writer.add_scalar("eval/ssim", ssim_val, epoch_idx)
-
-        psnr_val = psnr(self.ground_truth, volume_img)
-        self.writer.add_scalar("eval/psnr", psnr_val, epoch_idx)
-
-        nmse_val = nmse(self.ground_truth, volume_img)
-        self.writer.add_scalar("eval/nmse", nmse_val, epoch_idx)
-
-        # Update.
-        self.last_nmse = nmse_val
-        self.last_psnr = psnr_val
-        self.last_ssim = ssim_val
-
-    def _plot_info(
-        self, data_1, data_2, cste_1, cste_2, title_1, title_2, epoch_idx, tag
-    ):
-        fig = plt.figure(figsize=(20, 20))
-        plt.subplot(2, 2, 1)
-        plt.imshow(data_1 / cste_1)
+    def _plot_3subplots(
+        self, data_1, title1, data_2, title2, data_3, title3, slice_id, epoch_idx, tag, map
+        ):
+        fig = plt.figure(figsize=(20,30))
+        plt.subplot(1,3,1)
+        plt.imshow(data_1[slice_id], cmap=map)
+        plt.title(title1)
         plt.axis('off')
-        plt.colorbar()
-        plt.title(f"{title_1} kspace")
-
-        plt.subplot(2, 2, 2)
-        plt.hist(data_1.flatten(), log=True, bins=100)
-
-        max_val = np.max(data_1)
-        min_val = np.min(data_1)
-        # ignoring zero data
-        non_zero = data_1 > 0
-        mean = np.mean(data_1[non_zero])
-        median = np.median(data_1[non_zero])
-        q05 = np.quantile(data_1[non_zero], 0.05)
-        q95 = np.quantile(data_1[non_zero], 0.95)
-
-        plt.axvline(
-            mean, color="r", linestyle="dashed", linewidth=2, label=f"Mean: {mean:.2e}"
-        )
-        plt.axvline(
-            median,
-            color="g",
-            linestyle="dashed",
-            linewidth=2,
-            label=f"Median: {median:.2e}",
-        )
-        plt.axvline(
-            q05, color="b", linestyle="dotted", linewidth=2, label=f"Q05: {q05:.2e}"
-        )
-        plt.axvline(
-            q95, color="b", linestyle="dotted", linewidth=2, label=f"Q95: {q95:.2e}"
-        )
-        plt.axvline(
-            min_val,
-            color="orange",
-            linestyle="solid",
-            linewidth=2,
-            label=f"Min: {min_val:.2e}",
-        )
-        plt.axvline(
-            max_val,
-            color="purple",
-            linestyle="solid",
-            linewidth=2,
-            label=f"Max: {max_val:.2e}",
-        )
-        plt.legend()
-        plt.title(f"{title_1} histogram")
-
-        plt.subplot(2, 2, 3)
-        plt.imshow(data_2 / cste_2)
+        
+        plt.subplot(1,3,2)
+        plt.imshow(data_2[slice_id], cmap=map)
+        plt.title(title2)
         plt.axis('off')
-        plt.colorbar()
-        plt.title(f"{title_2} kspace")
-
-        plt.subplot(2, 2, 4)
-        plt.hist(data_2.flatten(), log=True, bins=100)
-
-        max_val = np.max(data_2)
-        min_val = np.min(data_2)
-        # ignoring zero data
-        non_zero = data_2 > 0
-        mean = np.mean(data_2[non_zero])
-        median = np.median(data_2[non_zero])
-        q05 = np.quantile(data_2[non_zero], 0.05)
-        q95 = np.quantile(data_2[non_zero], 0.95)
-
-        plt.axvline(
-            mean, color="r", linestyle="dashed", linewidth=2, label=f"Mean: {mean:.2e}"
+        
+        plt.subplot(1,3,3)                
+        plt.imshow(data_3[slice_id], cmap=map)
+        plt.title(title3)
+        plt.axis('off')
+        
+            
+        self.writer.add_figure(
+            tag,
+            fig,
+            global_step=epoch_idx,
         )
-        plt.axvline(
-            median,
-            color="g",
-            linestyle="dashed",
-            linewidth=2,
-            label=f"Median: {median:.2e}",
-        )
-        plt.axvline(
-            q05, color="b", linestyle="dotted", linewidth=2, label=f"Q05: {q05:.2e}"
-        )
-        plt.axvline(
-            q95, color="b", linestyle="dotted", linewidth=2, label=f"Q95: {q95:.2e}"
-        )
-        plt.axvline(
-            min_val,
-            color="orange",
-            linestyle="solid",
-            linewidth=2,
-            label=f"Min: {min_val:.2e}",
-        )
-        plt.axvline(
-            max_val,
-            color="purple",
-            linestyle="solid",
-            linewidth=2,
-            label=f"Max: {max_val:.2e}",
-        )
-        plt.legend()
-        plt.title(f"{title_2} histogram")
-
-        self.writer.add_figure(tag, fig, global_step=epoch_idx)
         plt.close(fig)
 
+        
+    @torch.no_grad()
+    def _plot_2subplots(
+        self, data_1, title1, data_2, title2, slice_id, epoch_idx, tag, map
+        ):
+        fig = plt.figure(figsize=(20,20))
+        plt.subplot(1,2,1)
+        plt.imshow(data_1[slice_id], cmap=map)
+        plt.title(title1)
+        plt.axis('off')
+        
+        plt.subplot(1,2,2)
+        plt.imshow(data_2[slice_id], cmap=map)
+        plt.title(title2)
+        plt.axis('off')
+            
+        self.writer.add_figure(
+            tag,
+            fig,
+            global_step=epoch_idx,
+        )
+        plt.close(fig)
     @torch.no_grad()
     def _log_weight_info(self, epoch_idx):
         """Log weight values and gradients."""

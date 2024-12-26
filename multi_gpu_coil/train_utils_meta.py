@@ -315,12 +315,12 @@ class Trainer:
         # "Fill-in" center values.
         # volume_kspace[..., left_idx:right_idx] = center_vals
         
-        coils_img = []
-        for i in range(4):
-            coils_img.append(np.abs(inverse_fft2_shift(volume_kspace)[:,i]))
+        # coils_img = []
+        # for i in range(4):
+        #     coils_img.append(np.abs(inverse_fft2_shift(volume_kspace)[:,i]))
 
         self.model.train()
-        return volume_kspace, coils_img
+        return volume_kspace
 
     ###########################################################################
     ###########################################################################
@@ -338,7 +338,7 @@ class Trainer:
                 center_data["vals"],
             )
 
-            volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
+            volume_kspace = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
             cste_mod = self.dataloader.dataset.metadata[vol_id]["norm_cste"]
             cste_arg = np.pi / 180
             

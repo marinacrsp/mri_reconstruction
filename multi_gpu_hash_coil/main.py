@@ -62,6 +62,10 @@ def main(rank: int, world_size: int, config: dict):
     
     num_workers = int(os.environ['SLURM_CPUS_PER_TASK'])//world_size - 1
     print(num_workers)
+    print(world_size)
+    print(int(os.environ['SLURM_CPUS_PER_TASK']))
+    if num_workers < 0:
+        num_workers = 0
     #################### DATALOADING TO MULTIGPU ######################
     dataloader = DataLoader(
         dataset,
@@ -75,6 +79,7 @@ def main(rank: int, world_size: int, config: dict):
     #####################################################################
     
     model_params = config["model"]["params"]
+    model_params["n_volumes"] = config["dataset"]["n_volumes"]
     
     #####################################################################
     # volume embedding

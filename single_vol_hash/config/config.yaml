@@ -1,6 +1,6 @@
 seed: 7
 
-path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs/12_11/ # TODO: SET.
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/singlevol_hash/ # TODO: SET.
 
 # model_checkpoint: path_to_checkpoint/epoch_1999.pt  # TODO: SET (OR LEAVE COMMENTED).
 

@@ -274,50 +274,37 @@ class Trainer:
         volume_kspace = (
             volume_kspace * self.dataloader_consistency.dataset.metadata[vol_id]["norm_cste"]
         )
-
         volume_kspace = tensor_to_complex_np(volume_kspace.detach().cpu())
 
-        # "Fill-in" center values.
-        # volume_kspace[..., left_idx:right_idx] = center_vals #NOTE Shape of volume kspace is [n_coils, n_slices, height, width, 2] it's not in complex form
-        
-        ### Compute the result of Grappa interpolation from the computed volume
-        # volume_img = rss(inverse_fft2_shift(volume_kspace))
-        
-        
         if self.add_pisco and (epoch_idx + 1) >= self.E_epoch:
             grappa_volume = torch.zeros(shape, dtype = torch.complex64)
-
-            # If it is a checkpoint, recalculate the grappa volume
-            w_grappa = torch.tensor(np.mean(self.batch_grappas, axis=0))
+            # If it is a checkpoint, recalculate the grappa volume, as the mean of the list of grappa matrixes 
+            w_grappa = torch.tensor(np.mean(self.batch_grappas, axis=0)) # Size: Nn·Nc x Nc
                 
             # Now predict the sensitivities (accuracy of the Ws grappa matrixes)
             for points_ids in dataloader:
                 points_ids = points_ids[0]
                 t_coors, nn_coors, Nn = get_grappa_matrixes(points_ids, shape, patch_size=self.patch_size, normalized=False)
                 
-                nt_coors = torch.zeros((t_coors.shape), dtype=torch.int)
+                den_t_coors = torch.zeros((t_coors.shape), dtype=torch.int)
+                den_nn_coors = torch.zeros((nn_coors.shape), dtype=torch.int)
                 for idx in range(len(shape)):
-                    nt_coors[:,idx] = denormalize_fn(nt_coors[:,idx], norm_cte[idx])
+                    den_t_coors[...,idx] = denormalize_fn(t_coors[...,idx], norm_cte[idx])
+                    den_nn_coors[...,idx] = denormalize_fn(nn_coors[...,idx], norm_cte[idx])
 
-                nnn_coors = torch.zeros((nn_coors.shape), dtype=torch.int)
-                for idx in range(len(shape)):
-                    nnn_coors[:,idx] = denormalize_fn(nnn_coors[:,idx], norm_cte[idx])
-                
-                neighbor_kspacevals = torch.tensor(volume_kspace[nnn_coors[...,2], nnn_coors[...,3], nnn_coors[...,1], nnn_coors[...,0]])
-                neighbor_kspacevals = neighbor_kspacevals.reshape((t_coors.shape[0], Nn, n_coils))
-                ps_kspacevals = neighbor_kspacevals.view(t_coors.shape[0], Nn*n_coils)
+                nn_kspacevals = torch.tensor(tensor_to_complex_np(self.kspace_gt[den_nn_coors[...,2], den_nn_coors[...,3], den_nn_coors[...,1], den_nn_coors[...,0]]),
+                                        dtype = torch.complex64)
+                ps_kspacevals = nn_kspacevals.view(t_coors.shape[0], Nn*n_coils)
                 t_kspacevals = torch.matmul(ps_kspacevals, w_grappa)  # NOTE : Computed value based on neighbouring patch of 3x3 and estimated grappa mean
-                
-                grappa_volume[nt_coors[...,2], nt_coors[...,3], nt_coors[...,1], nt_coors[...,0]] = t_kspacevals
-                
-            grappa_img =  rss(inverse_fft2_shift((grappa_volume)))   
+                grappa_volume[den_t_coors[...,2], den_t_coors[...,3], den_t_coors[...,1], den_t_coors[...,0]] = t_kspacevals
             
+            grappa_volume = np.abs(inverse_fft2_shift(grappa_volume))
         else:
-            grappa_img = []
+            grappa_volume = []
             
 
         self.model.train()
-        return volume_kspace, grappa_img
+        return volume_kspace, grappa_volume
 
     ###########################################################################
     ###########################################################################
@@ -326,20 +313,21 @@ class Trainer:
     def _log_performance(self, epoch_idx, vol_id = 0):
             # Predict volume image.
             
-            shape = self.dataloader.dataset.metadata[vol_id]["shape"]
-            center_data = self.dataloader.dataset.metadata[vol_id]["center"]
+            shape = self.dataloader_consistency.dataset.metadata[vol_id]["shape"]
+            center_data = self.dataloader_consistency.dataset.metadata[vol_id]["center"]
             left_idx, right_idx, center_vals = (
                 center_data["left_idx"],
                 center_data["right_idx"],
                 center_data["vals"],
             )
 
-            volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
-            cste_mod = self.dataloader.dataset.metadata[vol_id]["norm_cste"]
+            volume_kspace, grappa_volume = self.predict(vol_id, shape, left_idx, right_idx, center_vals, epoch_idx)
+            volume_kspace[..., left_idx:right_idx] = 0
+            cste_mod = self.dataloader_consistency.dataset.metadata[vol_id]["norm_cste"]
             
             y_kspace_data = tensor_to_complex_np(self.kspace_gt)
             
-            mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
+            mask = self.dataloader_consistency.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
 
             y_kspace_data_u = y_kspace_data  * (mask)
             y_kspace_prediction_u = volume_kspace * (1-mask)
@@ -382,7 +370,7 @@ class Trainer:
                                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace composition",
                                     'viridis')
 
-                self._plot_2subplots(self.ground_truth[vol_id], 'groundtruth vol',
+                self._plot_2subplots(self.ground_truth, 'groundtruth vol',
                                     raw_img_edges, 'groundtruth edges', 
                                     slice_id, epoch_idx, 
                                     f"groundtruth/vol_{vol_id}_slice_{slice_id}", 'gray')
@@ -392,25 +380,24 @@ class Trainer:
                                     slice_id, epoch_idx, 
                                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
             
-            
-                # Plot 4 coils image
-                fig = plt.figure(figsize=(20, 10))
-                
-                for i in range(4):
-                    plt.subplot(1,4,i+1)
-                    plt.imshow(coils_img[i][slice_id], cmap='gray')
-                    plt.axis('off')
-                
-                self.writer.add_figure(
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
+
+                if self.add_pisco and (epoch_idx + 1) >= self.E_epoch:
+                    fig = plt.figure(figsize=(10,5))
+                    for i in range(4): # Plot the first 4 coils
+                        plt.subplot(1,4,i+1)
+                        plt.imshow(grappa_volume[slice_id,i,...], cmap='gray')
+                        plt.axis('off')
+
+                    self.writer.add_figure(
+                        f"prediction/vol_{vol_id}/slice{slice_id}/coils_img",
+                        fig,
+                        global_step=epoch_idx,
+                    )
+                    plt.close(fig)
                 
                 
 
-            self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
+            # self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
 
             ############################################################
             # Log evaluation metrics.
@@ -425,30 +412,30 @@ class Trainer:
             
             # ############################################################
             # # # Comparison metrics for the volume image w center and the groundtruth
-            nmse_val = nmse(self.ground_truth[vol_id], y_img_edges_center)
+            nmse_val = nmse(self.ground_truth, y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_wcenter", nmse_val, epoch_idx)
 
-            psnr_val = psnr(self.ground_truth[vol_id], y_img_edges_center)
+            psnr_val = psnr(self.ground_truth, y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_wcenter", psnr_val, epoch_idx)
 
-            ssim_val = ssim(self.ground_truth[vol_id], y_img_edges_center)
+            ssim_val = ssim(self.ground_truth, y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
 
             # ############################################################
             # # Comparison metrics for the volume image w center + predictions and the groundtruth
-            nmse_val = nmse(self.ground_truth[vol_id], y_img_final)
+            nmse_val = nmse(self.ground_truth, y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_acq_pred", nmse_val, epoch_idx)
 
-            psnr_val = psnr(self.ground_truth[vol_id], y_img_final)
+            psnr_val = psnr(self.ground_truth, y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_acq_pred", psnr_val, epoch_idx)
 
-            ssim_val = ssim(self.ground_truth[vol_id], y_img_final)
+            ssim_val = ssim(self.ground_truth, y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
 
             # Update.
-            self.last_nmse[vol_id] = nmse_val
-            self.last_psnr[vol_id] = psnr_val
-            self.last_ssim[vol_id] = ssim_val
+            self.last_nmse = nmse_val
+            self.last_psnr = psnr_val
+            self.last_ssim = ssim_val
 
     @torch.no_grad()
     def _plot_3subplots(

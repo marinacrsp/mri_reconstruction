@@ -18,13 +18,14 @@ class Siren(nn.Module):
         n_layers=4,
         out_dim=2,
         omega_0=30,
+        n_volumes = 5,
         dropout_rate=0.20,
     ) -> None:
         super().__init__()
         
         self.n_flayer = n_layers // 2
         self.n_slayer = n_layers - self.n_flayer
-        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=n_features, n_max=320, n_min=n_min)
+        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=n_features, n_max=320, n_min=n_min, n_volumes=n_volumes)
         coord_encoding_dim = levels*n_features + coord_dim-2 # NOTE: kx and ky provide an embedding on their own, remaining coordinates (kz, coilID need to be appended)
         
         self.sine_layers = [

@@ -194,8 +194,10 @@ class Trainer:
         neighborhood_corners = torch.zeros((t_coordinates.shape[0], Nn, n_coils), dtype=torch.complex64)
 
         for idx in range(n_coils):
+            # Predict value of t 
             t_predicted[:, idx] = torch.view_as_complex(self.model(t_coordinates[:, idx, :]))
             for nn in range(Nn):
+                # Predict value of neighbors
                 neighborhood_corners[:, nn, idx] = torch.view_as_complex(self.model(patch_coordinates[:, nn, idx, :])).detach()
         
         ##### Estimate the Ws for a random subset of values

@@ -5,7 +5,7 @@ runtype: train
 
 path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23
 
-model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2024-12-25_10h41m01s/checkpoints/epoch_0499.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2024-12-25_10h41m01s/checkpoints/epoch_0499.pt
 
 model:
   id: Siren
@@ -18,7 +18,7 @@ model:
     n_features: 3
     n_min: 45
     size_hashtable: 12
-    n_layers: 4
+    n_layers: 6
     
 dataset:
   path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/
@@ -29,9 +29,9 @@ dataset:
   center_frac: 0.15
 
 dataloader:
-  # effective_batch_size: 720_000
+  effective_batch_size: 720_000
   # effective_batch_size: 960_000
-  effective_batch_size: 1_200_000
+  # effective_batch_size: 1_200_000
 
 loss:
   id: MSEL2

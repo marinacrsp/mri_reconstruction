@@ -399,19 +399,19 @@ class Trainer:
             
             
                 # Plot 4 coils image
-                fig = plt.figure(figsize=(20, 10))
+                # fig = plt.figure(figsize=(20, 10))
                 
-                for i in range(4):
-                    plt.subplot(1,4,i+1)
-                    plt.imshow(coils_img[i][slice_id], cmap='gray')
-                    plt.axis('off')
+                # for i in range(4):
+                #     plt.subplot(1,4,i+1)
+                #     plt.imshow(coils_img[i][slice_id], cmap='gray')
+                #     plt.axis('off')
                 
-                self.writer.add_figure(
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
+                # self.writer.add_figure(
+                #     f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
+                #     fig,
+                #     global_step=epoch_idx,
+                # )
+                # plt.close(fig)
                 
                 
 

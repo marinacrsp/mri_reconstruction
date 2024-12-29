@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:3
 #SBATCH --output=logs_new/%j.out
 #SBATCH --cpus-per-task=5
 ## SBATCH --mem=50G

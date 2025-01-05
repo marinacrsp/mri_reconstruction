@@ -44,6 +44,7 @@ class Trainer:
         self.n_epochs = config["n_epochs"]
         self.config = config
         self.dataloader = dataloader
+        
         # self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
         
         # Wrap the model in the data distributed parallelism
@@ -123,7 +124,7 @@ class Trainer:
             self.dataloader.sampler.set_epoch(epoch_idx)
             empirical_risk = self._run_epoch()
             
-            if self.device == 0:
+            if torch.distributed.get_rank() == 0:
                 print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
                 self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
                 # TODO: UNCOMMENT WHEN USING LR SCHEDULER.
@@ -133,12 +134,12 @@ class Trainer:
                 if (epoch_idx + 1) % self.log_interval == 0:
                     self._log_performance(epoch_idx)
                     self._log_weight_info(epoch_idx)
-
+                    print(f'Logged {epoch_idx}-th results')
                 if (epoch_idx + 1) % self.checkpoint_interval == 0:
                     # Takes ~3 seconds.
                     self._save_checkpoint(epoch_idx)
 
-        if self.device == 0:
+        if torch.distributed.get_rank() == 0:
             self._log_information(empirical_risk)
             self.writer.close()
             
@@ -188,7 +189,7 @@ class Trainer:
         """Reconstruct MRI volume (k-space)."""
         self.model.eval()
         n_slices, n_coils, height, width = shape
-
+        
         # Create tensors of indices for each dimension
         kx_ids = torch.cat([torch.arange(left_idx), torch.arange(right_idx, width)])
         ky_ids = torch.arange(height)
@@ -196,7 +197,7 @@ class Trainer:
         coil_ids = torch.arange(n_coils)
 
         # Use meshgrid to create expanded grids
-        kspace_ids = torch.meshgrid(kx_ids, ky_ids, kz_ids, coil_ids, indexing="ij")
+        kspace_ids = torch.meshgrid(vol_ids, kx_ids, ky_ids, kz_ids, coil_ids, indexing="ij")
         kspace_ids = torch.stack(kspace_ids, dim=-1).reshape(-1, len(kspace_ids))
 
         dataset = TensorDataset(kspace_ids)
@@ -214,16 +215,17 @@ class Trainer:
         )
         for point_ids in dataloader:
             point_ids = point_ids[0].to(self.device, dtype=torch.long)
+            # volID, kx, ky, kz, coilID
             coords = torch.zeros_like(
-                point_ids, dtype=torch.float32, device=self.device
+                point_ids[:,:-1], dtype=torch.float32, device=self.device
             )
+            vol_ids_tensor = (torch.ones(len(point_ids))*vol_id).to(self.device) 
             # Normalize the necessary coordinates for hash encoding to work
-            coords[:, :2] = point_ids[:, :2]
-            coords[:, 2] = (2 * point_ids[:, 2]) / (n_slices - 1) - 1
-            coords[:, 3] = point_ids[:, 3]
+            coords[:, :2] = point_ids[:, :2] ## The first coordinate corresponds to the volume ID
+            coords[:, 2] = (2 * point_ids[:, 2]) / (n_slices - 1) - 1 # Normalize the kz coordinate like in dataset
             
-            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + coords[:,3].long())
-
+            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + point_ids[:,3].long())
+            coords = torch.hstack([vol_ids_tensor.unsqueeze(1), coords])
             # Need to add `:len(coords)` because the last batch has a different size (than 60_000).
             outputs = self.model(coords, vol_embeddings[: len(coords)], coil_embeddings)
             
@@ -324,23 +326,23 @@ class Trainer:
             
             
                 # Plot 4 coils image
-                fig = plt.figure(figsize=(20, 10))
+                # fig = plt.figure(figsize=(20, 10))
                 
-                for i in range(4):
-                    plt.subplot(1,4,i+1)
-                    plt.imshow(coils_img[i][slice_id], cmap='gray')
-                    plt.axis('off')
+                # for i in range(4):
+                #     plt.subplot(1,4,i+1)
+                #     plt.imshow(coils_img[i][slice_id], cmap='gray')
+                #     plt.axis('off')
                 
-                self.writer.add_figure(
-                    f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
-                    fig,
-                    global_step=epoch_idx,
-                )
-                plt.close(fig)
+                # self.writer.add_figure(
+                #     f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
+                #     fig,
+                #     global_step=epoch_idx,
+                # )
+                # plt.close(fig)
                 
                 
 
-            self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
+            # self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
 
             ############################################################
             # Log evaluation metrics.

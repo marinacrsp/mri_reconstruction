@@ -44,7 +44,7 @@ def main():
     config["device"] = args.device
 
     rs_numpy, rs_torch = handle_reproducibility(config["seed"])
-
+    print(f'Connected to GPU: {torch.cuda.is_available()}')
     torch.set_default_dtype(torch.float32)
 
     dataset = KCoordDataset(**config["dataset"])
@@ -94,6 +94,7 @@ def main():
         model_state_dict = torch.load(config["model_checkpoint"])["model_state_dict"]
         model.load_state_dict(model_state_dict)
         
+        # print("Initialization from dictionary of embeddings: ")
         # phi_coil_zero = torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"]
         # phi_vol_zero = torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"]
         # print("Loading the dictionary of embeddings from pretrained checkpoint")
@@ -108,7 +109,7 @@ def main():
         embeddings_coil.weight.data.copy_(phi_coil_zero)
         embeddings_vol.weight.data.copy_(phi_vol_zero)
 
-        # print("Initialization from mean of embeddings (from meta training): ")
+        # print("Initialization from dictionary of embeddings (from meta training): ")
         # phi_coil_zero = torch.load(config["model_checkpoint"])["phi_coil"]["weight"]
         # phi_vol_zero = torch.load(config["model_checkpoint"])["phi_vol"]["weight"]
         # embeddings_coil.weight.data.copy_(phi_coil_zero)

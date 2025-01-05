@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from torch import nn
 
-
 class Siren(nn.Module):
     def __init__(
         self,
@@ -13,21 +12,22 @@ class Siren(nn.Module):
         n_min = 16,
         size_hashtable = 12,
         vol_embedding_dim=256,
-        coil_embedding_dim = 128,
+        coil_embedding_dim = 64,
         hidden_dim=512,
+        n_features = 2,
         n_layers=4,
-        n_features=3,
         out_dim=2,
         omega_0=30,
+        n_volumes = 5,
         dropout_rate=0.20,
     ) -> None:
         super().__init__()
         
         self.n_flayer = n_layers // 2
         self.n_slayer = n_layers - self.n_flayer
-        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=n_features, n_max=320, n_min=n_min)
-        coord_encoding_dim = levels*n_features + coord_dim-2 # NOTE: We need to append the kz and coilID coordinates 
-
+        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=n_features, n_max=320, n_min=n_min, n_volumes=n_volumes)
+        coord_encoding_dim = levels*n_features + coord_dim-2 # NOTE: kx and ky provide an embedding on their own, remaining coordinates (kz, coilID need to be appended)
+        
         self.sine_layers = [
             SineLayer(
                 coord_encoding_dim + vol_embedding_dim + coil_embedding_dim,
@@ -61,8 +61,10 @@ class Siren(nn.Module):
         # self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, coords, latent_vol, latent_coil):
+        # x coordinates : volID, kx (unnormalized), ky (unnormalized), kz (normalized), coilID - ignored
         # Hash encode the input coordinates.
         x = self.embed_fn(coords)
+        # output x -> 16 (2 x,y * 3 embd dim) * 10 levels + 1 kz(normalized)
         
         # Concatenate embeddings and positional encodings.
         x = torch.cat([x, latent_vol, latent_coil], dim=-1)
@@ -76,7 +78,7 @@ class Siren(nn.Module):
             x = layer(x)
 
         return self.output_layer(x)
-    
+
 
 class SineLayer(nn.Module):
     """Linear layer with sine activation. Adapted from Siren repo"""
@@ -90,7 +92,10 @@ class SineLayer(nn.Module):
         self.in_features = in_features
 
         self.linear = nn.Linear(in_features, out_features, bias=bias)
+        # self.linear = nn.utils.weight_norm(nn.Linear(in_features, out_features, bias=bias))
 
+        # self.layer_norm = nn.LayerNorm(out_features)
+        # self.batch_norm = nn.BatchNorm1d(out_features)
 
         with torch.no_grad():
             if self.is_first:
@@ -102,4 +107,5 @@ class SineLayer(nn.Module):
                 )
 
     def forward(self, x):
+
         return torch.sin(self.omega_0 * self.linear(x))

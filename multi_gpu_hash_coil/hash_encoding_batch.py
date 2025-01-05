@@ -177,7 +177,7 @@ class hash_encoder(nn.Module):
                 
             xy_embeddings_all = torch.cat(xy_embedded_all, dim=1)
             full_embedding = torch.cat((xy_embeddings_all, reduced_batch[:,3].unsqueeze(-1)), dim=1)
-            
+            ## Introduce the coordinate corresponding to the kz normalized previously// ignore the coil coordinate
             model_input[mask_vol] = full_embedding
     
         return model_input

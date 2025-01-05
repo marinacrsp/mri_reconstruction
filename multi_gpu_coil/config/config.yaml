@@ -1,15 +1,15 @@
 seed: 7
-
+### 3 gpus
 runtype: train
 # runtype: test
 
 path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26
 
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_10/2024-12-13_17h59m09s/checkpoints/epoch_0199.pt
-
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-04_17h20m08s/checkpoints/epoch_0099.pt
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-04_17h23m20s/checkpoints/epoch_0099.pt
 dataset:
   path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/
-  n_volumes: 20
+  n_volumes: 50
   n_slices: 2
   with_mask: False  # NOTE: During inference phase, set to True.
   acceleration: 4
@@ -18,7 +18,7 @@ dataset:
 
 dataloader:
   # effective_batch_size: 1_200_000
-  effective_batch_size: 720_000
+  effective_batch_size: 720000
   # effective_batch_size: 480_000
   # effective_batch_size: 960_000
 model:
@@ -49,9 +49,9 @@ scheduler:
     step_size: 20_000
 
 # Training Process
-n_epochs: 200
-log_interval: 50
-checkpoint_interval: 200  # Keep in mind that each checkpoint takes ~241 MB of space.
+n_epochs: 100
+log_interval: 300
+checkpoint_interval: 100  # Keep in mind that each checkpoint takes ~241 MB of space.
 
 freeze_model: False
 

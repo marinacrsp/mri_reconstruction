@@ -62,7 +62,7 @@ def main(rank: int, world_size: int, config: dict):
     num_workers = int(os.environ['SLURM_CPUS_PER_TASK'])//world_size 
     batch_size = loader_config["effective_batch_size"]//world_size
     
-    print(batch_size)
+    # print(batch_size)
     #################### DATALOADING TO MULTIGPU ######################
     dataloader = DataLoader(
         dataset,
@@ -137,8 +137,8 @@ def main(rank: int, world_size: int, config: dict):
             ]
             model.load_state_dict(model_state_dict)
             print("Loading the dictionary of embeddings from pretrained checkpoint")
-            embeddings_vol.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"][:len(dataset.metadata)])
-            embeddings_coil.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"][:total_n_coils.item()])
+            embeddings_vol.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_vol_state_dict"]["weight"])
+            embeddings_coil.weight.data.copy_(torch.load(config["model_checkpoint"])["embedding_coil_state_dict"]["weight"])
             
             print(f"GPU{rank}] Checkpoint loaded successfully.")
             

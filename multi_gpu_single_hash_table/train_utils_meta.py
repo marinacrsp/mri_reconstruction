@@ -1,25 +1,38 @@
 import os
 from pathlib import Path
 from typing import Optional
-
+from itertools import chain
 import fastmri
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from data_utils import *
+from torch.optim import SGD, Adam, AdamW
 from fastmri.data.transforms import tensor_to_complex_np, to_tensor
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import broadcast
+import torch.distributed as dist
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
+
+OPTIMIZER_CLASSES = {
+    "Adam": Adam,
+    "AdamW": AdamW,
+    "SGD": SGD,
+}
 
 
 class Trainer:
     def __init__(
         self,
         dataloader,
-        embeddings,
+        embeddings_vol,
+        phi_vol,
+        embeddings_coil,
+        phi_coil,
+        embeddings_coil_idx,
         model,
         loss_fn,
         optimizer,
@@ -29,13 +42,24 @@ class Trainer:
     ) -> None:
         self.device = device
         self.n_epochs = config["n_epochs"]
-
+        self.config = config
         self.dataloader = dataloader
-        self.embeddings = embeddings.to(self.device)
-        self.embeddings = DDP(embeddings, device_ids=[self.device])
-
+        # self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
+        
+        # Wrap the model in the data distributed parallelism
         self.model = model.to(self.device)
         self.model = DDP(self.model, device_ids=[self.device])
+        
+        # Wrap the embeddings also in the data distributed parallelism
+        self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
+        self.embeddings_vol, self.embeddings_coil = DDP(embeddings_vol, device_ids=[self.device]), DDP(embeddings_coil, device_ids=[self.device])
+        
+        self.n_levels_hash = config["model"]["params"]["levels"]
+        self.phi_vol, self.phi_coil = phi_vol.to(self.device), phi_coil.to(self.device)
+        
+        self.meta_reinitialization = config["meta_learning"]["reinit_step"]
+        self.epsilon_meta = config["meta_learning"]["epsilon"]
+        self.start_idx = embeddings_coil_idx.to(self.device)
 
         # If stateful loss function, move its "parameters" to `device`.
         if hasattr(loss_fn, "to"):
@@ -63,8 +87,8 @@ class Trainer:
                         hf["reconstruction_rss"][()][: config["dataset"]["n_slices"]]
                     )
                     self.kspace_gt.append(
-                        to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
-                    ))
+                        tensor_to_complex_np(to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
+                    )))
                     )
 
             # Scientific and nuissance hyperparameters.
@@ -73,7 +97,7 @@ class Trainer:
             self.hparam_info["loss"] = config["loss"]["id"]
             self.hparam_info["acceleration"] = config["dataset"]["acceleration"]
             self.hparam_info["center_frac"] = config["dataset"]["center_frac"]
-            self.hparam_info["embedding_dim"] = self.embeddings.module.embedding_dim
+            # self.hparam_info["embedding_dim"] = self.embeddings.module.embedding_dim
             self.hparam_info["sigma"] = config["loss"]["params"]["sigma"]
             self.hparam_info["gamma"] = config["loss"]["params"]["gamma"]
 
@@ -96,16 +120,19 @@ class Trainer:
         """Train the model across multiple epochs and log the performance."""
         empirical_risk = 0
         for epoch_idx in range(self.n_epochs):
-            # In distributed mode, calling the set_epoch() method before creating the DataLoader iterator is necessary to make shuffling work properly.
-            # Otherwise, the same ordering will be always used.
             self.dataloader.sampler.set_epoch(epoch_idx)
             empirical_risk = self._run_epoch()
-
+            
+            # print("No meta initialization")
+            # if (epoch_idx + 1) % self.meta_reinitialization == 0:
+            #     self._reptile_initialization()
+                
             if self.device == 0:
                 print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
                 self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
                 # TODO: UNCOMMENT WHEN USING LR SCHEDULER.
                 # self.writer.add_scalar("Learning Rate", self.scheduler.get_last_lr()[0], epoch_idx)
+
 
                 if (epoch_idx + 1) % self.log_interval == 0:
                     self._log_performance(epoch_idx)
@@ -118,24 +145,32 @@ class Trainer:
         if self.device == 0:
             self._log_information(empirical_risk)
             self.writer.close()
+            
 
+        
     def _run_epoch(self):
         # Also known as "empirical risk".
         avg_loss = 0.0
         n_obs = 0
 
         self.model.train()
-        for inputs, targets in self.dataloader:
+        for batch_idx, (inputs, targets) in enumerate(self.dataloader):
             inputs, targets = inputs.to(self.device), targets.to(self.device)
-            coords, latent_embeddings = inputs[:, 1:], self.embeddings(
-                inputs[:, 0].long()
-            )
-
+            
+            # Get the index for the coil latent embedding
+            coords = inputs[:, 1:-1] #kx, ky, kz
+            vol_ids = inputs[:,0].long()
+            coil_ids = inputs[:,-1].long() 
+            
+            latent_vol = self.embeddings_vol(vol_ids)
+            latent_coil = self.embeddings_coil(self.start_idx[vol_ids] + coil_ids)
+            
             self.optimizer.zero_grad(set_to_none=True)
-
-            outputs = self.model(coords, latent_embeddings)
+    
+            outputs = self.model(coords, latent_vol, latent_coil)
+            
             # Can be thought as a moving average (with "stride" `batch_size`) of the loss.
-            batch_loss = self.loss_fn(outputs, targets, latent_embeddings)
+            batch_loss = self.loss_fn(outputs, targets, latent_vol)
 
             batch_loss.backward()
             self.optimizer.step()
@@ -146,6 +181,27 @@ class Trainer:
         self.scheduler.step()
         avg_loss = avg_loss / n_obs
         return avg_loss
+
+    def _syncronize_update(self):
+        broadcast(self.phi_vol, src=0) 
+        broadcast(self.phi_coil, src = 0)
+
+    def _reptile_initialization(self):
+        phi_vol_bar = self.embeddings_vol.module.weight.mean(dim=0)
+        phi_coil_bar = self.embeddings_coil.module.weight.mean(dim=0)
+        
+        self.phi_vol += self.epsilon_meta*(phi_vol_bar - self.phi_vol)
+        self.phi_coil += self.epsilon_meta*(phi_coil_bar - self.phi_coil)
+        
+        self.embeddings_vol.module.weight.data.copy_(self.phi_vol)
+        self.embeddings_coil.module.weight.data.copy_(self.phi_coil)
+        
+        # Update the optimizer to use the new embeddings
+        self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
+            chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
+            **self.config["optimizer"]["params"],
+        ) 
+        # self._syncronize_update()
 
     ###########################################################################
     ###########################################################################
@@ -171,7 +227,7 @@ class Trainer:
         dataloader = DataLoader(
             dataset, batch_size=60_000, shuffle=False, num_workers=3
         )
-        vol_embeddings = self.embeddings(
+        vol_embeddings = self.embeddings_vol(
             torch.tensor([vol_id] * 60_000, dtype=torch.long, device=self.device)
         )
 
@@ -185,14 +241,16 @@ class Trainer:
             coords = torch.zeros_like(
                 point_ids, dtype=torch.float32, device=self.device
             )
-
-            coords[:, 0] = (2 * point_ids[:, 0]) / (width - 1) - 1
-            coords[:, 1] = (2 * point_ids[:, 1]) / (height - 1) - 1
+            # Normalize the necessary coordinates for hash encoding to work
+            coords[:, :2] = point_ids[:, :2]
             coords[:, 2] = (2 * point_ids[:, 2]) / (n_slices - 1) - 1
-            coords[:, 3] = (2 * point_ids[:, 3]) / (n_coils - 1) - 1
+            coords[:, 3] = point_ids[:, 3]
+            
+            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + coords[:,3].long())
 
             # Need to add `:len(coords)` because the last batch has a different size (than 60_000).
-            outputs = self.model(coords, vol_embeddings[: len(coords)])
+            outputs = self.model(coords, vol_embeddings[: len(coords)], coil_embeddings)
+            
             # "Fill in" the unsampled region.
             volume_kspace[
                 point_ids[:, 2], point_ids[:, 3], point_ids[:, 1], point_ids[:, 0]
@@ -207,15 +265,18 @@ class Trainer:
 
         # "Fill-in" center values.
         # volume_kspace[..., left_idx:right_idx] = center_vals
-
-        # volume_img = rss(inverse_fft2_shift(volume_kspace))
+        
+        coils_img = []
+        for i in range(4):
+            coils_img.append(np.abs(inverse_fft2_shift(volume_kspace)[:,i]))
 
         self.model.train()
-        return volume_kspace
+        return volume_kspace, coils_img
 
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
+        
+###########################################################################
+###########################################################################
+###########################################################################
     @torch.no_grad() 
     def _log_performance(self, epoch_idx):
         for vol_id in self.dataloader.dataset.metadata.keys():
@@ -228,7 +289,7 @@ class Trainer:
                 center_data["vals"],
             )
 
-            volume_kspace = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
+            volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
             cste_mod = self.dataloader.dataset.metadata[vol_id]["norm_cste"]
             cste_arg = np.pi / 180
             
@@ -287,6 +348,26 @@ class Trainer:
                                     slice_id, epoch_idx, 
                                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
             
+            
+                # Plot 4 coils image
+                # fig = plt.figure(figsize=(20, 10))
+                
+                # for i in range(4):
+                #     plt.subplot(1,4,i+1)
+                #     plt.imshow(coils_img[i][slice_id], cmap='gray')
+                #     plt.axis('off')
+                
+                # self.writer.add_figure(
+                #     f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
+                #     fig,
+                #     global_step=epoch_idx,
+                # )
+                # plt.close(fig)
+                
+                
+
+            # self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
+
             ############################################################
             # Log evaluation metrics.
             nmse_val = nmse(raw_img_edges, y_img_edges)
@@ -325,77 +406,7 @@ class Trainer:
             self.last_psnr[vol_id] = psnr_val
             self.last_ssim[vol_id] = ssim_val
             
-
-    @torch.no_grad()
-    def _log_weight_info(self, epoch_idx):
-        """Log weight values and gradients."""
-        for module, case in zip(
-            [self.model.module, self.embeddings.module], ["network", "embeddings"]
-        ):
-            for name, param in module.named_parameters():
-                subplot_count = 1 if param.data is None else 2
-                fig = plt.figure(figsize=(8 * subplot_count, 5))
-
-                plt.subplot(1, subplot_count, 1)
-                plt.hist(param.data.cpu().numpy().flatten(), bins=100, log=True)
-                # plt.hist(param.data.cpu().numpy().flatten(), bins='auto', log=True)
-                plt.title("Values")
-
-                if param.grad is not None:
-                    plt.subplot(1, subplot_count, 2)
-                    # plt.hist(param.grad.cpu().numpy().flatten(), bins='auto', log=True)
-                    plt.hist(param.grad.cpu().numpy().flatten(), bins=100, log=True)
-                    plt.title("Gradients")
-
-                tag = name.replace(".", "/")
-                self.writer.add_figure(
-                    f"params/{case}/{tag}", fig, global_step=epoch_idx
-                )
-                plt.close(fig)
-
-    @torch.no_grad()
-    def _save_checkpoint(self, epoch_idx):
-        """Save current state of the training process."""
-        # Ensure the path exists.
-        path = self.path_to_out / self.timestamp / "checkpoints"
-        os.makedirs(path, exist_ok=True)
-
-        path_to_file = path / f"epoch_{epoch_idx:04d}.pt"
-
-        # Prepare state to save.
-        save_dict = {
-            "model_state_dict": self.model.module.state_dict(),
-            "embedding_state_dict": self.embeddings.module.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "scheduler_state_dict": self.scheduler.state_dict(),
-        }
-        # Save trainer state.
-        torch.save(save_dict, path_to_file)
-
-    @torch.no_grad()
-    def _log_information(self, loss):
-        """Log 'scientific' and 'nuissance' hyperparameters."""
-
-        if hasattr(self.model.module, "activation"):
-            self.hparam_info["hidden_activation"] = type(
-                self.model.module.activation
-            ).__name__
-        elif type(self.model.module).__name__ == "Siren":
-            self.hparam_info["hidden_activation"] = "Sine"
-
-        if hasattr(self.model.module, "out_activation"):
-            self.hparam_info["output_activation"] = type(
-                self.model.module.out_activation
-            ).__name__
-        else:
-            self.hparam_info["output_activation"] = "None"
-
-        hparam_metrics = {"hparam/loss": loss}
-        hparam_metrics["hparam/eval_metric/nmse"] = np.mean(self.last_nmse)
-        hparam_metrics["hparam/eval_metric/psnr"] = np.mean(self.last_psnr)
-        hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
-        self.writer.add_hparams(self.hparam_info, hparam_metrics)
-
+    
     @torch.no_grad()
     def _plot_3subplots(
         self, data_1, title1, data_2, title2, data_3, title3, slice_id, epoch_idx, tag, map
@@ -446,10 +457,111 @@ class Trainer:
             global_step=epoch_idx,
         )
         plt.close(fig)
-###########################################################################
-###########################################################################
-###########################################################################
+        
+    @torch.no_grad()
+    def _log_coil_embeddings(
+        self, epoch_idx, tag
+        
+    ):
+        full_coil_embeddings, vol_embeddings = self.embeddings_coil.module.weight.data.cpu(), self.embeddings_vol.module.weight.data.cpu()
+        nvols = vol_embeddings.shape[0]
+        fig = plt.figure(figsize=(nvols*6,12))
 
+        for i in range(nvols):
+            if i != nvols-1:
+                end_coil = self.start_idx[i+1]
+                coil_embeddings = full_coil_embeddings[self.start_idx[i] : end_coil]
+            else:
+                coil_embeddings = full_coil_embeddings[self.start_idx[i]:]
+        
+            plt.subplot(nvols,1,i+1)
+            plt.title(f"Vol: {i+1}")
+            plt.hist(coil_embeddings.flatten(), bins = 100)
+            if i != nvols - 1:
+                plt.xticks([])
+        plt.suptitle('Coils', fontsize=30)
+        plt.tight_layout()
+        self.writer.add_figure(tag, fig, global_step=epoch_idx)
+        plt.close(fig)
+        
+    @torch.no_grad()
+    def _log_weight_info(self, epoch_idx):
+        """Log weight values and gradients."""
+        for module, case in zip(
+            [self.model.module, self.embeddings_vol.module, self.embeddings_coil.module], ["network", "embeddings"]
+        ):
+            for name, param in module.named_parameters():
+                subplot_count = 1 if param.data is None else 2
+                fig = plt.figure(figsize=(8 * subplot_count, 5))
+
+                plt.subplot(1, subplot_count, 1)
+                plt.hist(param.data.cpu().numpy().flatten(), bins=100, log=True)
+                # plt.hist(param.data.cpu().numpy().flatten(), bins='auto', log=True)
+                plt.title("Values")
+
+                if param.grad is not None:
+                    plt.subplot(1, subplot_count, 2)
+                    # plt.hist(param.grad.cpu().numpy().flatten(), bins='auto', log=True)
+                    plt.hist(param.grad.cpu().numpy().flatten(), bins=100, log=True)
+                    plt.title("Gradients")
+
+                tag = name.replace(".", "/")
+                self.writer.add_figure(
+                    f"params/{case}/{tag}", fig, global_step=epoch_idx
+                )
+                plt.close(fig)
+
+    @torch.no_grad()
+    # Save current model gradients (model is wraped in DDP so .module is needed)
+    def _save_checkpoint(self, epoch_idx):
+        """Save current state of the training process."""
+        # Ensure the path exists.
+        path = self.path_to_out / self.timestamp / "checkpoints"
+        os.makedirs(path, exist_ok=True)
+
+        path_to_file = path / f"epoch_{epoch_idx:04d}.pt"
+
+        # Prepare state to save.
+        save_dict = {
+            "model_state_dict": self.model.module.state_dict(),
+            "embedding_coil_state_dict": self.embeddings_coil.module.state_dict(),
+            "embedding_vol_state_dict": self.embeddings_vol.module.state_dict(),
+            "phi_vol": self.phi_vol,
+            "phi_coil": self.phi_coil,
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
+        }
+        # Save trainer state.
+        torch.save(save_dict, path_to_file)
+
+    @torch.no_grad()
+    def _log_information(self, loss):
+        """Log 'scientific' and 'nuissance' hyperparameters."""
+
+        if hasattr(self.model.module, "activation"):
+            self.hparam_info["hidden_activation"] = type(
+                self.model.module.activation
+            ).__name__
+        elif type(self.model.module).__name__ == "Siren":
+            self.hparam_info["hidden_activation"] = "Sine"
+
+        if hasattr(self.model.module, "out_activation"):
+            self.hparam_info["output_activation"] = type(
+                self.model.module.out_activation
+            ).__name__
+        else:
+            self.hparam_info["output_activation"] = "None"
+
+        hparam_metrics = {"hparam/loss": loss}
+        hparam_metrics["hparam/eval_metric/nmse"] = np.mean(self.last_nmse)
+        hparam_metrics["hparam/eval_metric/psnr"] = np.mean(self.last_psnr)
+        hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
+        self.writer.add_hparams(self.hparam_info, hparam_metrics)
+
+
+###########################################################################
+###########################################################################
+###########################################################################
 
 ##################################################
 # Loss Functions

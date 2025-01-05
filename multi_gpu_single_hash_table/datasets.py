@@ -20,7 +20,7 @@ class KCoordDataset(Dataset):
         n_volumes: int,
         n_slices: int = 3,
         with_mask: bool = True,
-        acceleration: int = 4,
+        acceleration: int = 2,
         center_frac: float = 0.15,
     ):
         self.metadata = {}
@@ -84,10 +84,10 @@ class KCoordDataset(Dataset):
             ##################################################
             # Convert indices into normalized coordinates in [-1, 1].
             kspace_coords = torch.zeros((kspace_ids.shape[0], 4), dtype=torch.float)
-            kspace_coords[:, 0] = (2 * kspace_ids[:, 0]) / (width - 1) - 1
-            kspace_coords[:, 1] = (2 * kspace_ids[:, 1]) / (height - 1) - 1
+            kspace_coords[:, :2] = kspace_ids[:, :2]
             kspace_coords[:, 2] = (2 * kspace_ids[:, 2]) / (n_slices - 1) - 1
-            kspace_coords[:, 3] = (2 * kspace_ids[:, 3]) / (n_coils - 1) - 1
+            kspace_coords[:, 3] = kspace_ids[:, 3] # NOTE: Unnormalized coilID
+            # kspace_coords[:, 3] = (2 * kspace_ids[:, 3]) / (n_coils - 1) - 1
 
             # Used to determine the latent vector (one per volume).
             vol_ids = torch.tensor([vol_id] * len(kspace_coords)).unsqueeze(1)

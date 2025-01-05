@@ -13,7 +13,9 @@ path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12_inf
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_10/2024-12-14_10h44m19s/checkpoints/epoch_0199.pt # 15 vol training normal
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12/2024-12-16_10h39m41s/checkpoints/epoch_0499.pt # Meta-learning trained w 4 freeze groups
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12/2024-12-16_10h31m46s/checkpoints/epoch_0499.pt # Meta learning trained w v2 
-model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_10/2024-12-16_11h35m40s/checkpoints/epoch_0499.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2024-12-29_11h03m05s/checkpoints/epoch_0199.pt # Model trained on 20 volumes
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2024-12-26_12h01m00s/checkpoints/epoch_0499.pt # Multivol hash tables
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-02_11h00m16s/checkpoints/epoch_0199.pt # Model trained on 20 vols
 
 dataset:
   path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_val/

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from itertools import chain
+
 import fastmri
 import h5py
 import matplotlib.pyplot as plt
@@ -11,9 +12,6 @@ from data_utils import *
 from torch.optim import SGD, Adam, AdamW
 from fastmri.data.transforms import tensor_to_complex_np, to_tensor
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import broadcast
-import torch.distributed as dist
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
@@ -26,42 +24,21 @@ OPTIMIZER_CLASSES = {
 
 class Trainer:
     def __init__(
-        self,
-        dataloader,
-        embeddings_vol,
-        phi_vol,
-        embeddings_coil,
-        phi_coil,
-        embeddings_coil_idx,
-        model,
-        loss_fn,
-        optimizer,
-        scheduler,
-        device,
-        config,
+        self, dataloader, embeddings_vol, phi_vol, vol_momentums, embeddings_coil, phi_coil, coil_momentums, embeddings_start_idx, model, loss_fn, optimizer, scheduler, config
     ) -> None:
-        self.device = device
+        self.device = torch.device(config["device"])
         self.n_epochs = config["n_epochs"]
-        self.config = config
-        self.dataloader = dataloader
-        
-        # self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
-        
-        # Wrap the model in the data distributed parallelism
-        self.model = model.to(self.device)
-        self.model = DDP(self.model, device_ids=[self.device])
-        
-        # Wrap the embeddings also in the data distributed parallelism
-        self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
-        self.embeddings_vol, self.embeddings_coil = DDP(embeddings_vol, device_ids=[self.device]), DDP(embeddings_coil, device_ids=[self.device])
-        
-        self.n_levels_hash = config["model"]["params"]["levels"]
-        self.phi_vol, self.phi_coil = phi_vol.to(self.device), phi_coil.to(self.device)
-        
-        self.meta_reinitialization = config["meta_learning"]["reinit_step"]
-        self.epsilon_meta = config["meta_learning"]["epsilon"]
-        self.start_idx = embeddings_coil_idx.to(self.device)
 
+        self.dataloader = dataloader
+        self.n_levels_hash = config["model"]["params"]["levels"]
+        
+        self.phi_vol, self.phi_coil = phi_vol.to(self.device), phi_coil.to(self.device)
+        self.embeddings_coil,  self.embeddings_vol = embeddings_coil.to(self.device), embeddings_vol.to(self.device)
+        
+        self.start_idx = embeddings_start_idx.to(self.device)
+        self.model = model.to(self.device)
+        self.config = config
+        
         # If stateful loss function, move its "parameters" to `device`.
         if hasattr(loss_fn, "to"):
             self.loss_fn = loss_fn.to(self.device)
@@ -69,49 +46,44 @@ class Trainer:
             self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.scheduler = scheduler
+        self.meta_reinitialization = config["meta_learning"]["reinit_step"]
+        self.epsilon_meta = config["meta_learning"]["epsilon"]
+        self.log_interval = config["log_interval"]
+        self.checkpoint_interval = config["checkpoint_interval"]
+        self.path_to_out = Path(config["path_to_outputs"])
+        self.timestamp = config["timestamp"]
+        self.writer = SummaryWriter(self.path_to_out / self.timestamp)
+        self.optimizer_vol_init = vol_momentums
+        self.optimizer_coil_init = coil_momentums
 
-        # Only one process does the logging (to avoid redundancy).
-        if self.device == 0:
-            self.log_interval = config["log_interval"]
-            self.checkpoint_interval = config["checkpoint_interval"]
-            self.path_to_out = Path(config["path_to_outputs"])
-            self.timestamp = config["timestamp"]
-            self.writer = SummaryWriter(self.path_to_out / self.timestamp)
+        # Ground truth (used to compute the evaluation metrics).
+        self.ground_truth = []
+        self.kspace_gt = []
+        for vol_id in self.dataloader.dataset.metadata.keys():
+            file = self.dataloader.dataset.metadata[vol_id]["file"]
+            with h5py.File(file, "r") as hf:
+                self.ground_truth.append(
+                    hf["reconstruction_rss"][()][: config["dataset"]["n_slices"]]
+                )
+                self.kspace_gt.append(
+                    to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
+                ))
+                )
+                
 
-            # Ground truth (used to compute the evaluation metrics).
-            self.ground_truth = []
-            self.kspace_gt = []
-            for vol_id in self.dataloader.dataset.metadata.keys():
-                file = self.dataloader.dataset.metadata[vol_id]["file"]
-                with h5py.File(file, "r") as hf:
-                    self.ground_truth.append(
-                        hf["reconstruction_rss"][()][: config["dataset"]["n_slices"]]
-                    )
-                    self.kspace_gt.append(
-                        to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
-                    ))
-                    )
+        # Scientific and nuissance hyperparameters.
+        self.hparam_info = config["hparam_info"]
+        self.hparam_info["loss"] = config["loss"]["id"]
+        self.hparam_info["acceleration"] = config["dataset"]["acceleration"]
+        self.hparam_info["center_frac"] = config["dataset"]["center_frac"]
+        # self.hparam_info["embedding_dim"] = self.embeddings.embedding_dim
+        self.hparam_info["sigma"] = config["loss"]["params"]["sigma"]
+        self.hparam_info["gamma"] = config["loss"]["params"]["gamma"]
 
-            # Scientific and nuissance hyperparameters.
-            self.hparam_info = config["hparam_info"]
-            self.hparam_info["learning_rate"] = self.scheduler.get_last_lr()[0]
-            self.hparam_info["loss"] = config["loss"]["id"]
-            self.hparam_info["acceleration"] = config["dataset"]["acceleration"]
-            self.hparam_info["center_frac"] = config["dataset"]["center_frac"]
-            # self.hparam_info["embedding_dim"] = self.embeddings.module.embedding_dim
-            self.hparam_info["sigma"] = config["loss"]["params"]["sigma"]
-            self.hparam_info["gamma"] = config["loss"]["params"]["gamma"]
-
-            # Evaluation metrics for the last log.
-            self.last_nmse = [0] * len(
-                self.dataloader.dataset.metadata
-            )  # Used during the last log.
-            self.last_psnr = [0] * len(
-                self.dataloader.dataset.metadata
-            )  # Used during the last log.
-            self.last_ssim = [0] * len(
-                self.dataloader.dataset.metadata
-            )  # Used during the last log.
+        # Evaluation metrics for the last log.
+        self.last_nmse = [0] * len(self.dataloader.dataset.metadata)
+        self.last_psnr = [0] * len(self.dataloader.dataset.metadata)
+        self.last_ssim = [0] * len(self.dataloader.dataset.metadata)
 
     ###########################################################################
     ###########################################################################
@@ -121,31 +93,45 @@ class Trainer:
         """Train the model across multiple epochs and log the performance."""
         empirical_risk = 0
         for epoch_idx in range(self.n_epochs):
-            self.dataloader.sampler.set_epoch(epoch_idx)
-            empirical_risk = self._run_epoch()
+            empirical_risk = self._train_one_epoch(epoch_idx)
+
+            print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
+            self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
+            # TODO: UNCOMMENT WHEN USING LR SCHEDULER.
+            # self.writer.add_scalar("Learning Rate", self.scheduler.get_last_lr()[0], epoch_idx)
             
-            if torch.distributed.get_rank() == 0:
-                print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
-                self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
-                # TODO: UNCOMMENT WHEN USING LR SCHEDULER.
-                # self.writer.add_scalar("Learning Rate", self.scheduler.get_last_lr()[0], epoch_idx)
+            if self.config["runtype"] == "train":
+                if (epoch_idx + 1) % self.meta_reinitialization == 0:
+                    self._reptile_initialization()
 
+            if (epoch_idx + 1) % self.log_interval == 0:
+                self._log_performance(epoch_idx)
+                self._log_weight_info(epoch_idx)
 
-                if (epoch_idx + 1) % self.log_interval == 0:
-                    self._log_performance(epoch_idx)
-                    self._log_weight_info(epoch_idx)
-                    print(f'Logged {epoch_idx}-th results')
-                if (epoch_idx + 1) % self.checkpoint_interval == 0:
-                    # Takes ~3 seconds.
-                    self._save_checkpoint(epoch_idx)
+            if (epoch_idx + 1) % self.checkpoint_interval == 0:
+                # Takes ~3 seconds.
+                self._save_checkpoint(epoch_idx)
 
-        if torch.distributed.get_rank() == 0:
-            self._log_information(empirical_risk)
-            self.writer.close()
-            
-
+        self._log_information(empirical_risk)
+        self.writer.close()
         
-    def _run_epoch(self):
+    def _reptile_initialization(self):
+        phi_vol_bar = self.embeddings_vol.weight.mean(dim=0)
+        phi_coil_bar = self.embeddings_coil.weight.mean(dim=0)
+        
+        self.phi_vol += self.epsilon_meta*(phi_vol_bar - self.phi_vol)
+        self.phi_coil += self.epsilon_meta*(phi_coil_bar - self.phi_coil)
+        
+        self.embeddings_vol.weight.data.copy_(self.phi_vol)
+        self.embeddings_coil.weight.data.copy_(self.phi_coil)
+        
+        # Update the optimizer to use the new embeddings
+        self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
+            chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
+            **self.config["optimizer"]["params"],
+        ) 
+        
+    def _train_one_epoch(self, epoch_idx):
         # Also known as "empirical risk".
         avg_loss = 0.0
         n_obs = 0
@@ -155,8 +141,8 @@ class Trainer:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
             # Get the index for the coil latent embedding
-            coords = inputs[:, :-1] #volID, kx, ky, kz
-            vol_ids = inputs[:,0].long() # Volume index
+            coords = inputs[:, 1:-1] # Ignoring coilIDs
+            vol_ids = inputs[:,0].long()
             coil_ids = inputs[:,-1].long() 
             
             latent_vol = self.embeddings_vol(vol_ids)
@@ -171,14 +157,13 @@ class Trainer:
 
             batch_loss.backward()
             self.optimizer.step()
-
+            
             avg_loss += batch_loss.item() * len(inputs)
             n_obs += len(inputs)
 
         self.scheduler.step()
         avg_loss = avg_loss / n_obs
         return avg_loss
-
 
     ###########################################################################
     ###########################################################################
@@ -189,9 +174,10 @@ class Trainer:
         """Reconstruct MRI volume (k-space)."""
         self.model.eval()
         n_slices, n_coils, height, width = shape
-        
+
         # Create tensors of indices for each dimension
         kx_ids = torch.cat([torch.arange(left_idx), torch.arange(right_idx, width)])
+        # kx_ids = torch.arange(width)
         ky_ids = torch.arange(height)
         kz_ids = torch.arange(n_slices)
         coil_ids = torch.arange(n_coils)
@@ -213,24 +199,26 @@ class Trainer:
             device=self.device,
             dtype=torch.float32,
         )
+        print('Predicting volume')
         for point_ids in dataloader:
             point_ids = point_ids[0].to(self.device, dtype=torch.long)
-            # volID, kx, ky, kz, coilID
             coords = torch.zeros_like(
                 point_ids[:,:-1], dtype=torch.float32, device=self.device
             )
-            vol_ids_tensor = (torch.ones(len(point_ids))*vol_id).to(self.device) 
+            # vol_ids_tensor = (torch.ones(len(point_ids))*vol_id).to(self.device)  
             # Normalize the necessary coordinates for hash encoding to work
-            coords[:, :2] = point_ids[:, :2] ## The first coordinate corresponds to the volume ID
-            coords[:, 2] = (2 * point_ids[:, 2]) / (n_slices - 1) - 1 # Normalize the kz coordinate like in dataset
+            coords[:, :2] = point_ids[:, :2]
+            coords[:, 2] = (2 * point_ids[:, 2]) / (n_slices - 1) - 1
             
-            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + point_ids[:,3].long())
-            coords = torch.hstack([vol_ids_tensor.unsqueeze(1), coords])
+            # coords = torch.hstack([vol_ids_tensor.unsqueeze(1), coords]) 
             
+            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + point_ids[:,3])
+
             # Need to add `:len(coords)` because the last batch has a different size (than 60_000).
             outputs = self.model(coords, vol_embeddings[: len(coords)], coil_embeddings)
             
             # "Fill in" the unsampled region.
+            # First position corresponds to volID
             volume_kspace[
                 point_ids[:, 2], point_ids[:, 3], point_ids[:, 1], point_ids[:, 0]
             ] = outputs
@@ -239,21 +227,20 @@ class Trainer:
         volume_kspace = (
             volume_kspace * self.dataloader.dataset.metadata[vol_id]["norm_cste"]
         )
-
+        
+        print('Volume predicted')
+        volume_kspace = (volume_kspace*self.dataloader.dataset.metadata[vol_id]["norm_cste"])
         volume_kspace = tensor_to_complex_np(volume_kspace.detach().cpu())
 
         # "Fill-in" center values.
         # volume_kspace[..., left_idx:right_idx] = center_vals
-        
-        coils_img = []
-        for i in range(4):
-            coils_img.append(np.abs(inverse_fft2_shift(volume_kspace)[:,i]))
+        # coils_img = []
+        # for i in range(4):
+        #     coils_img.append(np.abs(inverse_fft2_shift(volume_kspace)[:,i]))
 
         self.model.train()
-        return volume_kspace, coils_img
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
+        return volume_kspace
+
     @torch.no_grad() 
     def _log_performance(self, epoch_idx):
         for vol_id in self.dataloader.dataset.metadata.keys():
@@ -265,13 +252,15 @@ class Trainer:
                 center_data["right_idx"],
                 center_data["vals"],
             )
-
-            volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
             cste_mod = self.dataloader.dataset.metadata[vol_id]["norm_cste"]
             cste_arg = np.pi / 180
             
+            ## Fully sampled kspace prediction
+            volume_kspace = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
             y_kspace_data = tensor_to_complex_np(self.kspace_gt[vol_id])
             
+            
+            ###### predict the modulus
             mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
 
             y_kspace_data_u = y_kspace_data  * (mask)
@@ -285,9 +274,9 @@ class Trainer:
             y_kspace_final[..., left_idx:right_idx] = center_vals
             y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
             y_kspace_final_wcenter_rss = rss(y_kspace_final)
-            
             ###### predict the edges - image
             y_img_edges = np.abs(rss(inverse_fft2_shift(volume_kspace)))
+            
             
             ###### predict the center - image
             volume_kspace[..., left_idx:right_idx] = center_vals
@@ -298,7 +287,7 @@ class Trainer:
             y_kspace_data[..., left_idx:right_idx] = 0
             raw_img_edges = np.abs(rss(inverse_fft2_shift(y_kspace_data)))
             
-
+            
             for slice_id in range(shape[0]):
                 self._plot_3subplots(y_img_edges, 'Edges',
                                     y_img_edges_center, 'Edges + centre',
@@ -324,26 +313,9 @@ class Trainer:
                                     np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
                                     slice_id, epoch_idx, 
                                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
-            
-            
-                # Plot 4 coils image
-                # fig = plt.figure(figsize=(20, 10))
-                
-                # for i in range(4):
-                #     plt.subplot(1,4,i+1)
-                #     plt.imshow(coils_img[i][slice_id], cmap='gray')
-                #     plt.axis('off')
-                
-                # self.writer.add_figure(
-                #     f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
-                #     fig,
-                #     global_step=epoch_idx,
-                # )
-                # plt.close(fig)
-                
-                
-
-            # self._log_coil_embeddings(epoch_idx, f"embeddings/coil")
+            # volume_kspace[..., left_idx:right_idx] = 0
+            # modulus = np.abs(rss(volume_kspace))
+            # phase = np.angle(rss(volume_kspace))
 
             ############################################################
             # Log evaluation metrics.
@@ -366,11 +338,7 @@ class Trainer:
 
             ssim_val = ssim(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
-            # Update.
-            self.last_nmse[vol_id] = nmse_val
-            self.last_psnr[vol_id] = psnr_val
-            self.last_ssim[vol_id] = ssim_val
-            
+
             # ############################################################
             # # Comparison metrics for the volume image w center + predictions and the groundtruth
             nmse_val = nmse(self.ground_truth[vol_id], y_img_final)
@@ -383,8 +351,11 @@ class Trainer:
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
 
 
-            
-    
+            # # Update.
+            self.last_nmse[vol_id] = nmse_val
+            self.last_psnr[vol_id] = psnr_val
+            self.last_ssim[vol_id] = ssim_val
+        
     @torch.no_grad()
     def _plot_3subplots(
         self, data_1, title1, data_2, title2, data_3, title3, slice_id, epoch_idx, tag, map
@@ -412,7 +383,6 @@ class Trainer:
             global_step=epoch_idx,
         )
         plt.close(fig)
-
         
     @torch.no_grad()
     def _plot_2subplots(
@@ -435,13 +405,13 @@ class Trainer:
             global_step=epoch_idx,
         )
         plt.close(fig)
-        
+            
     @torch.no_grad()
     def _log_coil_embeddings(
         self, epoch_idx, tag
         
     ):
-        full_coil_embeddings, vol_embeddings = self.embeddings_coil.module.weight.data.cpu(), self.embeddings_vol.module.weight.data.cpu()
+        full_coil_embeddings, vol_embeddings = self.embeddings_coil.weight.data.cpu(), self.embeddings_vol.weight.data.cpu()
         nvols = vol_embeddings.shape[0]
         fig = plt.figure(figsize=(nvols*6,12))
 
@@ -461,12 +431,35 @@ class Trainer:
         plt.tight_layout()
         self.writer.add_figure(tag, fig, global_step=epoch_idx)
         plt.close(fig)
+
+    @ torch.no_grad()
+    def _log_hash_embeddings(
+        self, epoch_idx, tag
+        
+    ):
+        fig = plt.figure(figsize=(self.n_levels_hash*6,12))
+
+        for i, level in enumerate(self.model.embed_fn.parameters()):
+            box_embedd = level.detach().cpu()
+            plt.subplot(self.n_levels_hash,1,i+1)
+            plt.title(f"Level: {i+1}")
+            plt.hist(box_embedd.flatten(), bins = 100)
+            if i != self.n_levels_hash - 1:
+                plt.xticks([])
+        plt.suptitle('Hash', fontsize=30)
+        plt.tight_layout()
+        self.writer.add_figure(tag, fig, global_step=epoch_idx)
+        plt.close(fig)
+        
+
+        
+
         
     @torch.no_grad()
     def _log_weight_info(self, epoch_idx):
         """Log weight values and gradients."""
         for module, case in zip(
-            [self.model.module, self.embeddings_vol.module, self.embeddings_coil.module], ["network", "embeddings"]
+            [self.model, self.embeddings_vol], ["network", "embeddings_vol"]
         ):
             for name, param in module.named_parameters():
                 subplot_count = 1 if param.data is None else 2
@@ -490,7 +483,6 @@ class Trainer:
                 plt.close(fig)
 
     @torch.no_grad()
-    # Save current model gradients (model is wraped in DDP so .module is needed)
     def _save_checkpoint(self, epoch_idx):
         """Save current state of the training process."""
         # Ensure the path exists.
@@ -501,9 +493,9 @@ class Trainer:
 
         # Prepare state to save.
         save_dict = {
-            "model_state_dict": self.model.module.state_dict(),
-            "embedding_coil_state_dict": self.embeddings_coil.module.state_dict(),
-            "embedding_vol_state_dict": self.embeddings_vol.module.state_dict(),
+            "model_state_dict": self.model.state_dict(),
+            "embedding_vol_state_dict": self.embeddings_vol.state_dict(),
+            "embedding_coil_state_dict": self.embeddings_coil.state_dict(),
             "phi_vol": self.phi_vol,
             "phi_coil": self.phi_coil,
             "optimizer_state_dict": self.optimizer.state_dict(),
@@ -516,16 +508,14 @@ class Trainer:
     def _log_information(self, loss):
         """Log 'scientific' and 'nuissance' hyperparameters."""
 
-        if hasattr(self.model.module, "activation"):
-            self.hparam_info["hidden_activation"] = type(
-                self.model.module.activation
-            ).__name__
-        elif type(self.model.module).__name__ == "Siren":
+        if hasattr(self.model, "activation"):
+            self.hparam_info["hidden_activation"] = type(self.model.activation).__name__
+        elif type(self.model).__name__ == "Siren":
             self.hparam_info["hidden_activation"] = "Sine"
 
-        if hasattr(self.model.module, "out_activation"):
+        if hasattr(self.model, "out_activation"):
             self.hparam_info["output_activation"] = type(
-                self.model.module.out_activation
+                self.model.out_activation
             ).__name__
         else:
             self.hparam_info["output_activation"] = "None"
@@ -536,11 +526,9 @@ class Trainer:
         hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
         self.writer.add_hparams(self.hparam_info, hparam_metrics)
 
-
 ###########################################################################
 ###########################################################################
 ###########################################################################
-
 
 ##################################################
 # Loss Functions
@@ -572,7 +560,7 @@ class DMAELoss:
 class MSELoss:
     """Mean Squared Error Loss Function."""
 
-    def __init__(self, gamma=1.0):
+    def __init__(self, gamma):
         self.gamma = gamma
 
     def __call__(self, predictions, targets):
@@ -591,13 +579,13 @@ class MSEL2Loss:
         self.sigma_squared = sigma**2
         self.gamma = gamma
 
-    def __call__(self, predictions, targets, embeddings):
+    def __call__(self, predictions, targets, embeddings_vol):
         predictions = torch.view_as_complex(predictions)
         targets = torch.view_as_complex(targets)
 
         loss = ((predictions - targets).abs()) ** 2
 
-        reg = (embeddings**2).sum(axis=-1) / self.sigma_squared
+        reg = (embeddings_vol**2).sum(axis=-1) / self.sigma_squared
 
         return torch.mean(loss) + self.gamma * torch.mean(reg)
 

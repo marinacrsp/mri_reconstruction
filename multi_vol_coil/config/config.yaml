@@ -6,22 +6,26 @@ runtype: test
 # model_freeze: False
 model_freeze: True
 
-path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12_inf
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/inf_nvols
 
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_04/2024-12-07_12h26m33s/checkpoints/epoch_0599.pt # 5 vol normal training
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12/2024-12-12_15h18m48s/checkpoints/epoch_0499.pt # 5 vol meta-learning training
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_10/2024-12-14_10h44m19s/checkpoints/epoch_0199.pt # 15 vol training normal
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12/2024-12-16_10h39m41s/checkpoints/epoch_0499.pt # Meta-learning trained w 4 freeze groups
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12/2024-12-16_10h31m46s/checkpoints/epoch_0499.pt # Meta learning trained w v2 
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2024-12-29_11h03m05s/checkpoints/epoch_0199.pt # Model trained on 20 volumes
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2024-12-26_12h01m00s/checkpoints/epoch_0499.pt # Multivol hash tables
-model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-02_11h00m16s/checkpoints/epoch_0199.pt # Model trained on 20 vols
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol_12_12/2024-12-16_10h31m46s/checkpoints/epoch_0499.pt # Meta learning trained w v2  
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-02_11h00m16s/checkpoints/epoch_0199.pt # Model trained on 20 volumes
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-08_07h23m42s/checkpoints/epoch_0099.pt # Model trained on 30 vols
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-08_22h13m56s/checkpoints/epoch_0099.pt # Model trained on 50 volumes
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-10_20h50m37s/checkpoints/epoch_0499.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-14_18h48m12s/checkpoints/epoch_0199.pt # 1024 dimension
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-14_18h49m51s/checkpoints/epoch_0199.pt # 512 dimension
+
 
 dataset:
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_val/
-  n_volumes: 4
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/
+  n_volumes: 5
   n_slices: 2
-  with_mask: True  # NOTE: During training phase, set to False.
+  with_mask: False  # NOTE: During training phase, set to False.
   with_center: False
   acceleration: 4
   center_frac: 0.15
@@ -34,10 +38,11 @@ model:
   id: Siren
   params:
     coord_dim: 3
-    vol_embedding_dim: 256
-    coil_embedding_dim: 128
+    vol_embedding_dim: 512
+    coil_embedding_dim: 256
     hidden_dim: 512
     n_layers: 8
+    L : 10
 
 loss:
   id: MSEL2

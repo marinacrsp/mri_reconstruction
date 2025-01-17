@@ -522,8 +522,11 @@ class Trainer:
 
         hparam_metrics = {"hparam/loss": loss}
         hparam_metrics["hparam/eval_metric/nmse"] = np.mean(self.last_nmse)
+        hparam_metrics["hparam/eval_metric/nmse_stdev"] = np.std(self.last_nmse)
         hparam_metrics["hparam/eval_metric/psnr"] = np.mean(self.last_psnr)
+        hparam_metrics["hparam/eval_metric/psnr_stdev"] = np.std(self.last_psnr)
         hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
+        hparam_metrics["hparam/eval_metric/ssim_stdev"] = np.std(self.last_ssim)
         self.writer.add_hparams(self.hparam_info, hparam_metrics)
 
 ###########################################################################

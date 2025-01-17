@@ -3,13 +3,20 @@ seed: 7
 runtype: train
 # runtype: test
 
-path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train
 
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-04_17h20m08s/checkpoints/epoch_0099.pt
-model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-04_17h23m20s/checkpoints/epoch_0099.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-05_09h03m47s/checkpoints/epoch_0199.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_26/2025-01-05_15h58m52s/checkpoints/epoch_0099.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-10_12h53m35s/checkpoints/epoch_0149.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-11_10h40m22s/checkpoints/epoch_0149.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-13_13h13m43s/checkpoints/epoch_0199.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-13_13h11m35s/checkpoints/epoch_0199.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-14_18h48m12s/checkpoints/epoch_0199.pt # 1024 dimension
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-14_18h49m51s/checkpoints/epoch_0199.pt
+
 dataset:
   path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/
-  n_volumes: 50
+  n_volumes: 15
   n_slices: 2
   with_mask: False  # NOTE: During inference phase, set to True.
   acceleration: 4
@@ -18,15 +25,16 @@ dataset:
 
 dataloader:
   # effective_batch_size: 1_200_000
-  effective_batch_size: 720000
+  effective_batch_size: 360_000
+  # effective_batch_size: 540_000
   # effective_batch_size: 480_000
   # effective_batch_size: 960_000
 model:
   id: Siren
   params:
     coord_dim: 3
-    vol_embedding_dim: 256
-    coil_embedding_dim: 128
+    vol_embedding_dim: 512
+    coil_embedding_dim: 256
     hidden_dim: 512
     L : 10
     n_layers: 8
@@ -49,9 +57,9 @@ scheduler:
     step_size: 20_000
 
 # Training Process
-n_epochs: 100
-log_interval: 300
-checkpoint_interval: 100  # Keep in mind that each checkpoint takes ~241 MB of space.
+n_epochs: 200
+log_interval: 50
+checkpoint_interval: 200  # Keep in mind that each checkpoint takes ~241 MB of space.
 
 freeze_model: False
 

@@ -357,6 +357,11 @@ class Trainer:
             ssim_val = ssim(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
 
+            # # Update.
+            self.last_nmse[vol_id] = nmse_val
+            self.last_psnr[vol_id] = psnr_val
+            self.last_ssim[vol_id] = ssim_val
+
             # ############################################################
             # # Comparison metrics for the volume image w center + predictions and the groundtruth
             nmse_val = nmse(self.ground_truth[vol_id], y_img_final)
@@ -369,11 +374,7 @@ class Trainer:
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
 
 
-            # # Update.
-            self.last_nmse[vol_id] = nmse_val
-            self.last_psnr[vol_id] = psnr_val
-            self.last_ssim[vol_id] = ssim_val
-        
+
     @torch.no_grad()
     def _plot_3subplots(
         self, data_1, title1, data_2, title2, data_3, title3, slice_id, epoch_idx, tag, map
@@ -517,8 +518,11 @@ class Trainer:
 
         hparam_metrics = {"hparam/loss": loss}
         hparam_metrics["hparam/eval_metric/nmse"] = np.mean(self.last_nmse)
+        hparam_metrics["hparam/eval_metric/nmse_stdev"] = np.std(self.last_nmse)
         hparam_metrics["hparam/eval_metric/psnr"] = np.mean(self.last_psnr)
+        hparam_metrics["hparam/eval_metric/psnr_stdev"] = np.std(self.last_psnr)
         hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
+        hparam_metrics["hparam/eval_metric/ssim_stdev"] = np.std(self.last_ssim)
         self.writer.add_hparams(self.hparam_info, hparam_metrics)
 
 

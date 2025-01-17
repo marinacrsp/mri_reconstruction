@@ -5,7 +5,7 @@ runtype: train
 
 path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23
 
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2024-12-26_12h01m00s/checkpoints/epoch_0499.pt
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-07_10h11m29s/checkpoints/epoch_0349.pt
 
 model:
   id: Siren
@@ -51,9 +51,9 @@ scheduler:
     step_size: 20_000
 
 # Training Process
-n_epochs: 500
-log_interval: 600
-checkpoint_interval: 500  # Keep in mind that each checkpoint takes ~241 MB of space.
+n_epochs: 150
+log_interval: 50
+checkpoint_interval: 150  # Keep in mind that each checkpoint takes ~241 MB of space.
 
 meta_learning:
   reinit_step: 200

@@ -5,20 +5,14 @@ runtype: test
 
 # hash_freeze: True
 hash_freeze: False
+
 path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_12_inf
 
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-04_14h04m40s/checkpoints/epoch_0499.pt
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-08_08h05m32s/checkpoints/epoch_0499.pt
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-08_08h05m32s/checkpoints/epoch_0499.pt
-# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-10_20h46m31s/checkpoints/epoch_0499.pt
-model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-12_14h20m17s/checkpoints/epoch_0499.pt
-embedd_init: mean
-# embedd_init: reinit
-# embedd_init: same_vector
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol/2024-11-13_12h31m52s/checkpoints/epoch_0999.pt
 
 dataset:
   path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/
-  n_volumes: 4
+  n_volumes: 5
   n_slices: 2
   with_mask: True  # NOTE: During training phase, set to False.
   acceleration: 4
@@ -32,14 +26,14 @@ model:
   id: Siren
   params:
     coord_dim: 3
-    vol_embedding_dim: 512
-    coil_embedding_dim: 256
+    vol_embedding_dim: 256
+    coil_embedding_dim: 128
     hidden_dim: 512
-    levels: 15
+    levels: 3
     n_features: 3
     n_min: 45
     size_hashtable: 12
-    n_layers: 8
+    n_layers: 6
 
 loss:
   id: MSEL2

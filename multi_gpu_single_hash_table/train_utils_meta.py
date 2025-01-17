@@ -87,8 +87,8 @@ class Trainer:
                         hf["reconstruction_rss"][()][: config["dataset"]["n_slices"]]
                     )
                     self.kspace_gt.append(
-                        tensor_to_complex_np(to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
-                    )))
+                        to_tensor(preprocess_kspace(hf["kspace"][()][: config["dataset"]["n_slices"]]
+                    ))
                     )
 
             # Scientific and nuissance hyperparameters.
@@ -244,9 +244,8 @@ class Trainer:
             # Normalize the necessary coordinates for hash encoding to work
             coords[:, :2] = point_ids[:, :2]
             coords[:, 2] = (2 * point_ids[:, 2]) / (n_slices - 1) - 1
-            coords[:, 3] = point_ids[:, 3]
-            
-            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + coords[:,3].long())
+                        
+            coil_embeddings = self.embeddings_coil(self.start_idx[vol_id] + point_ids[:, 3].long())
 
             # Need to add `:len(coords)` because the last batch has a different size (than 60_000).
             outputs = self.model(coords, vol_embeddings[: len(coords)], coil_embeddings)

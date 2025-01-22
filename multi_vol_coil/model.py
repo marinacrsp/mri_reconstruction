@@ -63,10 +63,14 @@ class Siren(nn.Module):
 
     def forward(self, coords, vol_embedding, coil_embedding):
         # Positional encodings.
+        
         x = coords.unsqueeze(-1) * self.L_mult
         x = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
-        x = x.view(x.size(0), -1)
-
+        
+        if coords.ndimension() == 1:
+            x = x.view(x.size(0)*x.size(1)) 
+        else:
+            x = x.view(x.size(0), -1)
         # Concatenate embeddings and positional encodings.
         x = torch.cat([vol_embedding, coil_embedding, x], dim=-1)
         

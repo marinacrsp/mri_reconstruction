@@ -1,0 +1,71 @@
+seed: 7
+
+runtype: train
+# runtype: test
+
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/train_hash
+
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2024-12-26_12h01m00s/checkpoints/epoch_0499.pt
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-04_14h04m40s/checkpoints/epoch_0499.pt
+model:
+  id: Siren
+  params:
+    coord_dim: 4
+    hidden_dim: 512
+    levels: 15
+    n_features: 10
+    n_min: 45
+    size_hashtable: 12
+    n_layers: 8
+    
+dataset:
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/
+  n_volumes: 10
+  n_slices: 2
+  with_mask: False  # NOTE: During inference phase, set to True.
+  acceleration: 4
+  center_frac: 0.15
+
+dataloader:
+  effective_batch_size: 600_000
+  # effective_batch_size: 960_000
+  # effective_batch_size: 1_200_000
+
+loss:
+  id: MSEL2
+  params:
+    gamma: 0.0
+    sigma: 0.1
+
+optimizer:
+  id: Adam
+  params:
+    lr: 5.e-6 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
+
+scheduler:
+  id: StepLR
+  params:
+    gamma: 1.0
+    step_size: 20_000
+
+# Training Process
+n_epochs: 600
+log_interval: 50
+checkpoint_interval: 600  # Keep in mind that each checkpoint takes ~241 MB of space.
+
+meta_learning:
+  reinit_step: 200
+  epsilon: 0.01
+
+###################################################
+# INFORMATION ONLY - NO EFFECT ON RUN
+###################################################
+# The following section is for documentation purposes only.
+# It does not affect the actual behavior of the run.
+# These values are used solely for Tensorboard output, to help identify run types.
+hparam_info:
+  # dataset: "undersampled (except center)"
+  table_size: 12
+  n_max: 45
+  n_features: 10
+

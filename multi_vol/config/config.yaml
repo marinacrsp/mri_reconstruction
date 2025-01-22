@@ -1,0 +1,62 @@
+seed: 7
+
+# runtype: train
+runtype: test
+
+path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/inf_embedding_val
+
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs/multivol/2024-11-11_09h28m59s/checkpoints/epoch_0999.pt 
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_01_10_train/2025-01-18_17h13m07s/checkpoints/epoch_0499.pt
+dataset:
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_val/
+  n_volumes: 5
+  n_slices: 2
+  with_mask: True  # NOTE: During training phase, set to False.
+  acceleration: 4
+  center_frac: 0.15
+
+dataloader:
+  batch_size: 240_000
+  pin_memory: False
+
+model:
+  id: Siren
+  params:
+    coord_dim: 4
+    embedding_dim: 512
+    hidden_dim: 512
+    n_layers: 8
+    L: 10
+
+
+loss:
+  id: MSEL2
+  params:
+    gamma: 0.1
+    sigma: 0.01
+
+optimizer:
+  id: Adam
+  params:
+    lr: 5.e-6 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
+
+scheduler:
+  id: StepLR
+  params:
+    gamma: 1.0
+    step_size: 20_000
+
+# Training Process
+n_epochs: 1000
+log_interval: 50
+checkpoint_interval: 2000  # Keep in mind that each checkpoint takes ~241 MB of space.
+
+
+###################################################
+# INFORMATION ONLY - NO EFFECT ON RUN
+###################################################
+# The following section is for documentation purposes only.
+# It does not affect the actual behavior of the run.
+# These values are used solely for Tensorboard output, to help identify run types.
+hparam_info:
+  embedding_vol: 512

@@ -102,13 +102,6 @@ class Trainer:
 
             # Scientific and nuissance hyperparameters.
             self.hparam_info = config["hparam_info"]
-            self.hparam_info["learning_rate"] = self.scheduler.get_last_lr()[0]
-            self.hparam_info["loss"] = config["loss"]["id"]
-            self.hparam_info["acceleration"] = config["dataset"]["acceleration"]
-            self.hparam_info["center_frac"] = config["dataset"]["center_frac"]
-            # self.hparam_info["embedding_dim"] = self.embeddings.module.embedding_dim
-            self.hparam_info["sigma"] = config["loss"]["params"]["sigma"]
-            self.hparam_info["gamma"] = config["loss"]["params"]["gamma"]
 
             # Evaluation metrics for the last log.
             self.last_nmse = [0] * len(

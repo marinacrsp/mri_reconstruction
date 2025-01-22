@@ -57,7 +57,7 @@ def main():
         shuffle=True,
         pin_memory=loader_config["pin_memory"],
     )
-
+    print('Dataset loaded')
     model_params = config["model"]["params"]
     
     #####################################################################
@@ -66,7 +66,7 @@ def main():
     embeddings_vol = torch.nn.Embedding(
         len(dataset.metadata), model_params["vol_embedding_dim"]
     )
-
+    print(f'Shape of volume embeddings: {embeddings_vol.weight.shape}')
 
     ## Coil embeddings initialization
     ########################################################
@@ -80,7 +80,7 @@ def main():
     # Create the indexes to access the embedding coil table
     start_idx = torch.tensor([0] + list(torch.cumsum(torch.tensor(coil_sizes), dim=0)[:-1]))
     embeddings_coil = torch.nn.Embedding(total_n_coils.item(), model_params["coil_embedding_dim"])
-
+    print(f'Shape of coil embeddings: {embeddings_coil.weight.shape}')
 
     model = MODEL_CLASSES[config["model"]["id"]](**model_params)
 

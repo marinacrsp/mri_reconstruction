@@ -142,6 +142,7 @@ class Trainer:
             
             # Get the index for the coil latent embedding
             coords = inputs[:, :-1] # Ignoring coilIDs
+            print(coords.shape)
             vol_ids = inputs[:,0].long()
             coil_ids = inputs[:,-1].long() 
             

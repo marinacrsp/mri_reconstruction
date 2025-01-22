@@ -69,15 +69,10 @@ class Trainer:
                     )
                     
                 )
-
         # Scientific and nuissance hyperparameters.
         self.hparam_info = config["hparam_info"]
-        self.hparam_info["loss"] = config["loss"]["id"]
-        self.hparam_info["acceleration"] = config["dataset"]["acceleration"]
-        self.hparam_info["center_frac"] = config["dataset"]["center_frac"]
-        # self.hparam_info["embedding_dim"] = self.embeddings.embedding_dim
-        self.hparam_info["sigma"] = config["loss"]["params"]["sigma"]
-        self.hparam_info["gamma"] = config["loss"]["params"]["gamma"]
+        # self.hparam_info["embedding_vol_dim"] = self.embeddings_vol.weight.shape[1]
+        # self.hparam_info["embedding_coil_dim"] = self.embeddings_coil.weight.shape[1]
 
         # Evaluation metrics for the last log.
         self.last_nmse = [0] * len(self.dataloader.dataset.metadata)
@@ -96,13 +91,7 @@ class Trainer:
 
             print(f"EPOCH {epoch_idx}    avg loss: {empirical_risk}\n")
             self.writer.add_scalar("Loss/train", empirical_risk, epoch_idx)
-            # TODO: UNCOMMENT WHEN USING LR SCHEDULER.
-            # self.writer.add_scalar("Learning Rate", self.scheduler.get_last_lr()[0], epoch_idx)
-            
-            # if self.config["runtype"] == "train":
-            #     if (epoch_idx + 1) % self.meta_reinitialization == 0:
-            #         self._reptile_initialization()
-                    
+
             if (epoch_idx + 1) % self.log_interval == 0:
                 self._log_performance(epoch_idx)
                 self._log_weight_info(epoch_idx)
@@ -149,7 +138,6 @@ class Trainer:
             latent_coil = self.embeddings_coil(self.start_idx[vol_ids] + coil_ids)
             
             self.optimizer.zero_grad(set_to_none=True)
-    
             outputs = self.model(coords, latent_vol, latent_coil)
             
             # Can be thought as a moving average (with "stride" `batch_size`) of the loss.
@@ -158,21 +146,6 @@ class Trainer:
             batch_loss.backward()
 
             self.optimizer.step()
-            
-            # if (epoch_idx + 1) <= 50:
-                
-            #     print('Updating optimizers for volume and coils')
-            #     # print('Pre-update')
-            #     # print(self.optimizer.state_dict()["state"][1]["exp_avg"][0])
-                
-            #     self.optimizer.state_dict()["state"][0]["exp_avg"] += 2*self.optimizer_vol_init[0].clone()
-            #     self.optimizer.state_dict()["state"][1]["exp_avg"] += 2*self.optimizer_coil_init[0].clone()
-                
-            #     self.optimizer.state_dict()["state"][0]["exp_avg_sq"] += 2*self.optimizer_vol_init[1].clone()
-            #     self.optimizer.state_dict()["state"][1]["exp_avg_sq"] += 2*self.optimizer_coil_init[1].clone()
-
-                # print('Post-update')
-                # print(self.optimizer.state_dict()["state"][1]["exp_avg"][0])
         
             avg_loss += batch_loss.item() * len(inputs)
             n_obs += len(inputs)
@@ -268,15 +241,6 @@ class Trainer:
             ## Fully sampled kspace prediction
             volume_kspace_unweighted, volume_kspace, coils_img = self.predict(vol_id, shape, left_idx, right_idx, center_vals)
             y_kspace_data = tensor_to_complex_np(self.kspace_gt[vol_id])
-
-
-            # #     np.save(os.path.join(self.path_to_out, 'vol_kspace.npy'), volume_kspace)
-            # #     np.save(os.path.join(self.path_to_out, 'vol_kspace_unw.npy'), volume_kspace_unweighted)
-            # #     np.save(os.path.join(self.path_to_out, 'mask.npy'), mask)
-            # #     np.save(os.path.join(self.path_to_out, 'cste.npy'), cste_mod)
-            # #     np.save(os.path.join(self.path_to_out,'gt.npy'),  y_kspace_data)                
-            
-            
             
             ###### predict the modulus
             mask = self.dataloader.dataset.metadata[vol_id]["mask"].squeeze(-1).expand(shape).numpy()
@@ -292,6 +256,7 @@ class Trainer:
             y_kspace_final[..., left_idx:right_idx] = center_vals
             y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
             y_kspace_final_wcenter_rss = rss(y_kspace_final)
+            
             ###### predict the edges - image
             y_img_edges = np.abs(rss(inverse_fft2_shift(volume_kspace)))
             
@@ -331,9 +296,6 @@ class Trainer:
                                     np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
                                     slice_id, epoch_idx, 
                                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
-            # volume_kspace[..., left_idx:right_idx] = 0
-            # modulus = np.abs(rss(volume_kspace))
-            # phase = np.angle(rss(volume_kspace))
 
             ############################################################
             # Log evaluation metrics.
@@ -347,7 +309,7 @@ class Trainer:
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_edges", ssim_val, epoch_idx)
             
             # ############################################################
-            # # # Comparison metrics for the volume image w center and the groundtruth
+            ### Comparison metrics for the volume image w center and the groundtruth
             nmse_val = nmse(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_wcenter", nmse_val, epoch_idx)
 
@@ -357,7 +319,7 @@ class Trainer:
             ssim_val = ssim(self.ground_truth[vol_id], y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
 
-            # # Update.
+            ## Update.
             self.last_nmse[vol_id] = nmse_val
             self.last_psnr[vol_id] = psnr_val
             self.last_ssim[vol_id] = ssim_val
@@ -504,25 +466,15 @@ class Trainer:
     def _log_information(self, loss):
         """Log 'scientific' and 'nuissance' hyperparameters."""
 
-        if hasattr(self.model, "activation"):
-            self.hparam_info["hidden_activation"] = type(self.model.activation).__name__
-        elif type(self.model).__name__ == "Siren":
-            self.hparam_info["hidden_activation"] = "Sine"
-
-        if hasattr(self.model, "out_activation"):
-            self.hparam_info["output_activation"] = type(
-                self.model.out_activation
-            ).__name__
-        else:
-            self.hparam_info["output_activation"] = "None"
-
         hparam_metrics = {"hparam/loss": loss}
-        hparam_metrics["hparam/eval_metric/nmse"] = np.mean(self.last_nmse)
-        hparam_metrics["hparam/eval_metric/nmse_stdev"] = np.std(self.last_nmse)
         hparam_metrics["hparam/eval_metric/psnr"] = np.mean(self.last_psnr)
-        hparam_metrics["hparam/eval_metric/psnr_stdev"] = np.std(self.last_psnr)
+        # hparam_metrics["hparam/eval_metric/psnr_stdev"] = np.std(self.last_psnr)
+ 
         hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
-        hparam_metrics["hparam/eval_metric/ssim_stdev"] = np.std(self.last_ssim)
+        # hparam_metrics["hparam/eval_metric/ssim_stdev"] = np.std(self.last_ssim)
+        
+        hparam_metrics["hparam/eval_metric/nmse"] = np.mean(self.last_nmse)
+        # hparam_metrics["hparam/eval_metric/nmse_stdev"] = np.std(self.last_nmse)   
         self.writer.add_hparams(self.hparam_info, hparam_metrics)
 
 

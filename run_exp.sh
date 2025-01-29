@@ -13,7 +13,7 @@ conda activate pytcu11
 # export MASTER_ADDR=$master_addr
 
 
-# # # # # # # # Print debugging info for verification
+# # # # # # # # # Print debugging info for verification
 # echo "MASTER_ADDR is $MASTER_ADDR"
 # echo "Nodes allocated: $SLURM_JOB_NODELIST"
 # echo "Total GPUs: $SLURM_NTASKS"
@@ -27,8 +27,8 @@ conda activate pytcu11
 # echo "WORLD_SIZE=$WORLD_SIZE"
 
 # python -u multi_vol_hash_coil/main.py
-python -u multi_vol_hash/main.py
-# python -u multi_vol_coil/main.py
+# python -u multi_vol_hash/main.py
+python -u multi_vol_coil/main.py
 # python -u multi_vol/main.py
 
 # python -u multi_gpu_hash/main.py

@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from data_utils import *
+import copy
 from torch.optim import SGD, Adam, AdamW
 from fastmri.data.transforms import tensor_to_complex_np, to_tensor
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
@@ -35,6 +36,7 @@ class Trainer:
         
         self.start_idx = embeddings_start_idx.to(self.device)
         self.model = model.to(self.device)
+        
 
         # If stateful loss function, move its "parameters" to `device`.
         if hasattr(loss_fn, "to"):
@@ -103,21 +105,47 @@ class Trainer:
         self._log_information(empirical_risk)
         self.writer.close()
         
-    def _reptile_initialization(self):
-        phi_vol_bar = self.embeddings_vol.weight.mean(dim=0)
-        phi_coil_bar = self.embeddings_coil.weight.mean(dim=0)
+    # def _reptile_initialization(self):
+    #     phi_vol_bar = self.embeddings_vol.weight.mean(dim=0)
+    #     phi_coil_bar = self.embeddings_coil.weight.mean(dim=0)
         
-        self.phi_vol += self.epsilon_meta*(phi_vol_bar - self.phi_vol)
-        self.phi_coil += self.epsilon_meta*(phi_coil_bar - self.phi_coil)
+    #     self.phi_vol += self.epsilon_meta*(phi_vol_bar - self.phi_vol)
+    #     self.phi_coil += self.epsilon_meta*(phi_coil_bar - self.phi_coil)
         
-        self.embeddings_vol.weight.data.copy_(self.phi_vol)
-        self.embeddings_coil.weight.data.copy_(self.phi_coil)
+    #     self.embeddings_vol.weight.data.copy_(self.phi_vol)
+    #     self.embeddings_coil.weight.data.copy_(self.phi_coil)
         
-        # Update the optimizer to use the new embeddings
-        self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
-            chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
-            **self.config["optimizer"]["params"],
-        ) 
+    #     # Update the optimizer to use the new embeddings
+    #     self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
+    #         chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
+    #         **self.config["optimizer"]["params"],
+    #     ) 
+    
+    def add_noise_model(self, model_temp):
+        for _, tensor in model_temp.named_parameters():
+            tshape = torch.tensor(tensor.shape, dtype=float)
+            scale = torch.norm(tshape)
+
+            noise = torch.normal(0, torch.std(tensor).item(), tensor.size(), device=self.device)
+            tensor.data.add_(noise)
+            
+        return model_temp
+    
+    def add_noise_embedding(self, embedding):
+        for vect in embedding.parameters():
+            tshape = torch.tensor(vect.size(), dtype = float)
+            scale = torch.norm(tshape)
+            
+            noise = torch.normal(0, torch.std(vect).item(), size=vect.size(), device=self.device)
+            vect.data.add_(noise)
+            
+        return embedding
+    
+    def check_amount_noise(self, model_noise):
+        noise_total = []
+        for (_, tensor1), (_, tensor2) in zip(self.model.named_parameters(), model_noise.named_parameters()):
+            noise_total.append(torch.norm(tensor1.data-tensor2.data).detach().cpu())
+        return np.mean(noise_total)
         
     def _train_one_epoch(self, epoch_idx):
         # Also known as "empirical risk".
@@ -130,21 +158,36 @@ class Trainer:
             
             # Get the index for the coil latent embedding
             coords = inputs[:, 1:-1]
-            
             vol_ids = inputs[:,0].long()
             coil_ids = inputs[:,-1].long() 
+            
+            # ## ADD NOISE TO EMBEDDINGS
+            # embeddings_vol_temp = copy.deepcopy(self.embeddings_vol)
+            # embeddings_coil_temp = copy.deepcopy(self.embeddings_coil)
+            
+            # embeddings_vol_noise = self.add_noise_embedding(embeddings_vol_temp)
+            # embeddings_coil_noise = self.add_noise_embedding(embeddings_coil_temp)
+            
+            # noise_coil = torch.norm(embeddings_coil_noise.weight.data - self.embeddings_coil.weight.data)
+            # noise_vol = torch.norm(embeddings_vol_noise.weight.data - self.embeddings_vol.weight.data)
+            # print(f'Mean added noise to coil embeddings: {noise_coil}, \nMean added noise to volume embeddings: {noise_vol}')
             
             latent_vol = self.embeddings_vol(vol_ids)
             latent_coil = self.embeddings_coil(self.start_idx[vol_ids] + coil_ids)
             
             self.optimizer.zero_grad(set_to_none=True)
+            
+            # ADD NOISE TO MODEL
+            # model_temp = copy.deepcopy(self.model).to(self.device)
+            # model_noise = self.add_noise_model(model_temp)
+            # noise_added = self.check_amount_noise(model_noise)
+            # print(f'Added noise to model: {noise_added}')
+            
             outputs = self.model(coords, latent_vol, latent_coil)
             
             # Can be thought as a moving average (with "stride" `batch_size`) of the loss.
             batch_loss = self.loss_fn(outputs, targets, latent_vol)
-
             batch_loss.backward()
-
             self.optimizer.step()
         
             avg_loss += batch_loss.item() * len(inputs)

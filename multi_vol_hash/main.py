@@ -75,7 +75,7 @@ def main():
     for layer_name, tensor in model_state_dict.items():
         if 'embed_fn' in layer_name:
             numbers = re.findall(r'\d+', layer_name)
-            # Convert the last number to an integer
+            # Convert the last number to an integer - last number corresponds to the level ID
             last_number = int(numbers[-1])
             
             # Assign tensor to the corresponding level if the number is valid

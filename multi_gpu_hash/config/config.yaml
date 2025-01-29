@@ -13,7 +13,7 @@ model:
     coord_dim: 4
     hidden_dim: 512
     levels: 15
-    n_features: 10
+    n_features: 5
     n_min: 45
     size_hashtable: 12
     n_layers: 8
@@ -67,5 +67,5 @@ hparam_info:
   # dataset: "undersampled (except center)"
   table_size: 12
   n_max: 45
-  n_features: 10
+  n_features: 5
 

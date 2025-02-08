@@ -30,14 +30,15 @@ class Siren_skip_hash(nn.Module):
         size_hashtable = 12,
         n_layers=4,
         out_dim=2,
+        n_features=3,
         omega_0=30,
         dropout_rate=0.20,
     ) -> None:
         super().__init__()        
                 
         # Layer containing trainable parameters for the embedding
-        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=2, n_max=320, n_min=n_min)
-        coor_embedd_dim = levels*2 + 2
+        self.embed_fn = hash_encoder(levels=levels, log2_hashmap_size=size_hashtable, n_features_per_level=n_features, n_max=320, n_min=n_min)
+        coor_embedd_dim = levels*n_features + 2
                 
         # First set of layers (before the first skip connection)
         self.sinelayers = nn.ModuleList([SineLayer(coor_embedd_dim, hidden_dim, is_first=True, omega_0=omega_0)])

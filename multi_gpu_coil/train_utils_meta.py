@@ -648,6 +648,23 @@ class MSELoss:
         return self.gamma * torch.mean(loss)
 
 
+# class MSEL2Loss:
+#     """Mean Squared Error Loss Function with L2 (latent embedding) Regularization."""
+
+#     def __init__(self, sigma, gamma):
+#         self.sigma_squared = sigma**2
+#         self.gamma = gamma
+
+#     def __call__(self, predictions, targets, embeddings):
+#         predictions = torch.view_as_complex(predictions)
+#         targets = torch.view_as_complex(targets)
+
+#         loss = ((predictions - targets).abs()) ** 2
+
+#         reg = (embeddings**2).sum(axis=-1) / self.sigma_squared
+
+#         return torch.mean(loss) + self.gamma * torch.mean(reg)
+
 class MSEL2Loss:
     """Mean Squared Error Loss Function with L2 (latent embedding) Regularization."""
 
@@ -660,10 +677,10 @@ class MSEL2Loss:
         targets = torch.view_as_complex(targets)
 
         loss = ((predictions - targets).abs()) ** 2
-
-        reg = (embeddings**2).sum(axis=-1) / self.sigma_squared
-
+        reg = torch.norm(embeddings, dim=-1)
+        
         return torch.mean(loss) + self.gamma * torch.mean(reg)
+
 
 
 class MSEDistLoss:

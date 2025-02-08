@@ -42,7 +42,7 @@ class hash_encoder(nn.Module):
             box_embedds = box_embedds.to(device)
 
             Npoints = len(den)
-            xi_embedding = torch.zeros((Npoints, 2), device = device)
+            xi_embedding = torch.zeros((Npoints, self.n_features_per_level), device = device)
             
             for i in range(4):
                 xi_embedding += weights[...,i].unsqueeze(1) * box_embedds[...,i,:]

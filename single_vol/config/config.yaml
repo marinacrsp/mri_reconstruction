@@ -6,7 +6,7 @@ path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/singlevol_pisco/ 
 
 dataset:
   # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000609.h5
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050021.h5
   n_slices: 4
   with_mask: True
   mask_type: Random
@@ -15,7 +15,7 @@ dataset:
 
 dataset_full:
   # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000609.h5
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5
   n_slices: 4
   with_mask: False
   center_frac: 0.15

@@ -144,8 +144,8 @@ def main(rank: int, world_size: int, config: dict):
             
         else:
             ## Initialize the phi volumes for the coil and volume
-            torch.nn.init.normal_(phi_coil_zero.weight.data, 0.0, 0.1)
-            torch.nn.init.normal_(phi_vol_zero.weight.data, 0.0, 0.1)
+            torch.nn.init.normal_(phi_coil_zero.weight.data, 0.0, config["loss"]["params"]["sigma"])
+            torch.nn.init.normal_(phi_vol_zero.weight.data, 0.0, config["loss"]["params"]["sigma"])
 
             ## Copy the values into the dictionary of embeddings
             embeddings_coil.weight.data.copy_(phi_coil_zero.weight.data)

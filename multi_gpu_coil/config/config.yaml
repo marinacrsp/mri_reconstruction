@@ -19,16 +19,17 @@ dataset:
   n_volumes: 15
   n_slices: 2
   with_mask: False  # NOTE: During inference phase, set to True.
+  mask_type: Random
   acceleration: 4
   center_frac: 0.15
   vol_id0: 0
 
 dataloader:
-  # effective_batch_size: 1_200_000
+  effective_batch_size: 1_200_000
   # effective_batch_size: 600_000
   # effective_batch_size: 540_000
   # effective_batch_size: 480_000
-  effective_batch_size: 960_000
+  # effective_batch_size: 960_000
 model:
   id: Siren
   params:
@@ -43,12 +44,12 @@ loss:
   id: MSEL2
   params:
     gamma: 0.001
-    sigma: 0.01
+    sigma: 0.1
 
 optimizer:
   id: Adam
   params:
-    lr: 1.e-4 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
+    lr: 5.e-5 # The dot is necessary, otherwise the parser will mistake this for a string (and not a float).
 
 scheduler:
   id: StepLR
@@ -73,6 +74,6 @@ meta_learning:
 # It does not affect the actual behavior of the run.
 # These values are used solely for Tensorboard output, to help identify run types.
 hparam_info:
-  embedding_vol: 512
-  embedding_coil : 256
-  dropout: true
+  embedding_vol: 1024
+  embedding_coil : 512
+  dropout: false

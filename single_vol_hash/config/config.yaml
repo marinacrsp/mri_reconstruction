@@ -6,16 +6,16 @@ path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/singlevol_hash # 
 
 dataset:
   # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5 
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5
   n_slices: 3
-  with_mask: True
+  with_mask: False
   mask_type: Random
   acceleration: 4
   center_frac: 0.15
 
 dataset_full:
   # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000609.h5
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5
   n_slices: 4
   with_mask: False
   center_frac: 0.15
@@ -29,10 +29,10 @@ model:
   params:
     hidden_dim: 512
     levels: 8
-    n_min: 50
+    n_min: 45
     size_hashtable: 12
     n_features: 3
-    n_layers: 6
+    n_layers: 8
 
 loss:
   id: MSE
@@ -52,9 +52,9 @@ scheduler:
     step_size: 20_000
 
 # Training Process
-n_epochs: 2000
+n_epochs: 1000
 log_interval: 50
-checkpoint_interval: 2000
+checkpoint_interval: 1000
 
 l_pisco:
   addpisco: False

@@ -210,7 +210,7 @@ class Trainer:
             outputs = self.model(coords, latent_vol, latent_coil)
             
             # Can be thought as a moving average (with "stride" `batch_size`) of the loss.
-            batch_loss = self.loss_fn(outputs, targets, latent_vol)
+            batch_loss = self.loss_fn(outputs, targets, latent_vol, latent_coil)
 
             batch_loss.backward()
             self.optimizer.step()
@@ -648,6 +648,24 @@ class MSELoss:
         return self.gamma * torch.mean(loss)
 
 
+class MSEL2Loss:
+    """Mean Squared Error Loss Function with L2 (latent embedding) Regularization."""
+
+    def __init__(self, sigma, gamma):
+        self.sigma_squared = sigma**2
+        self.gamma = gamma
+
+    def __call__(self, predictions, targets, embeddings_vol, embeddings_coil):
+        predictions = torch.view_as_complex(predictions)
+        targets = torch.view_as_complex(targets)
+
+        loss = ((predictions - targets).abs()) ** 2
+
+        reg_vol = (embeddings_vol**2).sum(axis=-1) / self.sigma_squared
+        reg_coil = (embeddings_coil**2).sum(axis=-1) / self.sigma_squared
+
+        return torch.mean(loss) + self.gamma * 0.5 * (torch.mean(reg_vol) + torch.mean(reg_coil))
+
 # class MSEL2Loss:
 #     """Mean Squared Error Loss Function with L2 (latent embedding) Regularization."""
 
@@ -660,26 +678,9 @@ class MSELoss:
 #         targets = torch.view_as_complex(targets)
 
 #         loss = ((predictions - targets).abs()) ** 2
-
-#         reg = (embeddings**2).sum(axis=-1) / self.sigma_squared
-
-#         return torch.mean(loss) + self.gamma * torch.mean(reg)
-
-class MSEL2Loss:
-    """Mean Squared Error Loss Function with L2 (latent embedding) Regularization."""
-
-    def __init__(self, sigma, gamma):
-        self.sigma_squared = sigma**2
-        self.gamma = gamma
-
-    def __call__(self, predictions, targets, embeddings):
-        predictions = torch.view_as_complex(predictions)
-        targets = torch.view_as_complex(targets)
-
-        loss = ((predictions - targets).abs()) ** 2
-        reg = torch.norm(embeddings, dim=-1)
+#         reg = torch.norm(embeddings, dim=-1)
         
-        return torch.mean(loss) + self.gamma * torch.mean(reg)
+#         return torch.mean(loss) + self.gamma * torch.mean(reg)
 
 
 

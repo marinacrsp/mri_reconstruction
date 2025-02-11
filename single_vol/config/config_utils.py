@@ -14,7 +14,7 @@ def load_config(file_path: str) -> Dict[str, Any]:
     with open(file_path, "r") as file:
         config = yaml.safe_load(file)
 
-    config["timestamp"] = datetime.now().strftime("%m-%d_%Hh%Mm")
+    config["timestamp"] = datetime.now().strftime("%m-%d_%Hh%Mm%Ss")
     return config
 
 

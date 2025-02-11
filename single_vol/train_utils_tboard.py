@@ -120,6 +120,8 @@ class Trainer:
         n_obs = 0
 
         self.model.train()
+        
+        
         for inputs, targets in self.dataloader_consistency:
             inputs, targets = inputs.to(self.device), targets.to(self.device)
 
@@ -152,6 +154,7 @@ class Trainer:
         err_pisco = 0
         res1 = 0
         res2 = 0
+        
         for inputs, _ in self.dataloader_pisco:
             
             #### Compute grid 
@@ -163,6 +166,7 @@ class Trainer:
             # Compute the pisco loss
             batch_Lp = L_pisco(ws) * self.factor
             
+            print(f'Batch pisco loss: {batch_Lp}')
             assert batch_Lp.requires_grad, "batch_Lp does not require gradients."
         
             # Update the model based on the Lpisco loss
@@ -200,9 +204,9 @@ class Trainer:
                 # Predict value of neighbors
                 neighborhood_corners[:, nn, idx] = torch.view_as_complex(self.model(patch_coordinates[:, nn, idx, :])).detach()
         
-        ##### Estimate the Ws for a random subset of values
-        T_s, Ns = split_batch(t_predicted, self.minibatch)
-        P_s, _ = split_batch(neighborhood_corners, self.minibatch)
+        # ##### Estimate the Ws for a random subset of values
+        T_s, P_s = split_matrices_randomly(t_predicted, neighborhood_corners, self.minibatch)
+        Ns = len(P_s)
         
         # Estimate the Weight matrixes
         Ws = []
@@ -210,19 +214,20 @@ class Trainer:
         elem1 = 0
         elem2 = 0
         
+        
         for i, t_s in enumerate(T_s):
-            p_s = P_s[i]
-            p_s = torch.flatten(p_s, start_dim=1)
+            p_s = P_s[i].flatten(1)
             
-            ws, res1, res2 = compute_Lsquares(p_s, t_s, self.alpha)
+            # ws, res1, res2 = compute_Lsquares(p_s, t_s, self.alpha)
+            ws = compute_Lsquares(p_s, t_s, self.alpha)
             Ws.append(ws)
             
             ws_nograd = ws.detach()
             Ws_nograd.append(ws_nograd)
             
             # Compute an average of the residual terms
-            elem1 += res1
-            elem2 += res2
+            # elem1 += res1
+            # elem2 += res2
 
         return Ws, Ws_nograd, elem1/Ns, elem2/Ns
     
@@ -324,7 +329,7 @@ class Trainer:
             )
 
             volume_kspace, grappa_volume = self.predict(vol_id, shape, left_idx, right_idx, center_vals, epoch_idx)
-            volume_kspace[..., left_idx:right_idx] = 0
+            # volume_kspace[..., left_idx:right_idx] = 0
             cste_mod = self.dataloader_consistency.dataset.metadata[vol_id]["norm_cste"]
             
             y_kspace_data = tensor_to_complex_np(self.kspace_gt)
@@ -357,9 +362,9 @@ class Trainer:
             
 
             for slice_id in range(shape[0]):
-                self._plot_3subplots(y_img_edges, 'Edges',
-                                    y_img_edges_center, 'Edges + centre',
-                                    y_img_final, 'Edges + centre + acquisitions', 
+                self._plot_3subplots(y_img_edges, 'pred',
+                                    y_img_edges_center, 'pred + centre',
+                                    y_img_final, 'pred + centre + acquisitions', 
                                     slice_id, 
                                     epoch_idx, 
                                     f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img",
@@ -422,6 +427,10 @@ class Trainer:
 
             ssim_val = ssim(self.ground_truth, y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
+            
+            self.last_nmse = nmse_val
+            self.last_psnr = psnr_val
+            self.last_ssim = ssim_val
 
             # ############################################################
             # # Comparison metrics for the volume image w center + predictions and the groundtruth
@@ -433,11 +442,6 @@ class Trainer:
 
             ssim_val = ssim(self.ground_truth, y_img_final)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
-
-            # Update.
-            self.last_nmse = nmse_val
-            self.last_psnr = psnr_val
-            self.last_ssim = ssim_val
 
     @torch.no_grad()
     def _plot_3subplots(

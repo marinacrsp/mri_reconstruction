@@ -59,7 +59,7 @@ class Siren(nn.Module):
                 -np.sqrt(6 / hidden_dim) / omega_0, np.sqrt(6 / hidden_dim) / omega_0
             )
 
-        self.dropout = nn.Dropout(dropout_rate)
+        # self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, coords, vol_embedding, coil_embedding):
         # Positional encodings.
@@ -76,7 +76,7 @@ class Siren(nn.Module):
                 x = torch.cat([vol_embedding, coil_embedding, x], dim=-1)
 
             x = layer(x)
-            x = self.dropout(x)
+            # x = self.dropout(x)
 
         return self.output_layer(x)
 

@@ -12,7 +12,10 @@ path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/inf_embedding
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-08_08h05m32s/checkpoints/epoch_0499.pt
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-10_20h46m31s/checkpoints/epoch_0499.pt
 # model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/multivol_12_23/2025-01-12_14h20m17s/checkpoints/epoch_0499.pt
-model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/train_hash/2025-01-20_00h34m04s/checkpoints/epoch_0599.pt # HASH 10 Features/ pixel
+model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/train_hash/2025-01-20_00h34m04s/checkpoints/epoch_0599.pt # HASH 10 Features/ pixel, 15 levels
+# model_checkpoint: /scratch_net/ken/mcrespo/proj_marina/logs_new/train_hash/2025-01-22_10h57m46s/checkpoints/epoch_0599.pt # HASH 5 Features/ pixel, 15 levels
+
+
 embedd_init: mean
 # embedd_init: reinit
 # embedd_init: same_vector
@@ -26,7 +29,7 @@ dataset:
   center_frac: 0.15
 
 dataloader:
-  batch_size: 200_000
+  batch_size: 60_000
   pin_memory: False
 
 model:
@@ -58,7 +61,7 @@ scheduler:
     step_size: 20_000
 
 # Training Process
-n_epochs: 1000
+n_epochs: 2000
 log_interval: 50
 checkpoint_interval: 2000  # Keep in mind that each checkpoint takes ~241 MB of space.
 

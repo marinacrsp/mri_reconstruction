@@ -5,8 +5,8 @@ path_to_outputs: /scratch_net/ken/mcrespo/proj_marina/logs_new/singlevol_pisco/ 
 # model_checkpoint: path_to_checkpoint/epoch_1999.pt  # TODO: SET (OR LEAVE COMMENTED).
 
 dataset:
-  # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050021.h5
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
+  # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5
   n_slices: 4
   with_mask: True
   mask_type: Random
@@ -14,16 +14,16 @@ dataset:
   center_frac: 0.15
 
 dataset_full:
-  # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
-  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5
+  path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_203_6000861.h5 # TODO: SET.
+  # path_to_data: /itet-stor/mcrespo/bmicdatasets-originals/Originals/fastMRI/brain/multicoil_train/file_brain_AXT1POST_205_2050005.h5
   n_slices: 4
   with_mask: False
   center_frac: 0.15
 
 dataloader:
   # batch_size: 220_000 
-  batch_size: 120_000
-  # batch_size: 60_000 # NOTE: This is only for pisco training
+  # batch_size: 120_000
+  batch_size: 70000 # NOTE: This is only for pisco training
   pin_memory: False
 
 model:
@@ -57,12 +57,12 @@ log_interval: 50
 checkpoint_interval: 1000
 
 l_pisco:
-  # addpisco: True
-  addpisco: False
+  addpisco: True
+  # addpisco: False
   E_epoch: 500
   alpha: 1.e-6 # Regularizer for the W
-  factor: 0.01 # How much the Lpisco loss gets weighted
-  minibatch: 2000
+  factor: 1.e-4 # How much the Lpisco loss gets weighted
+  minibatch: 10000
   patch_size: 9
 
 ###################################################
@@ -72,22 +72,10 @@ l_pisco:
 # It does not affect the actual behavior of the run.
 # These values are used solely for Tensorboard output, to help identify run types.
 hparam_info:
-  # dataset: "undersampled (except center)"
   dataset: "all data (except center)"
 
-  # observation_type: "train sample"
   observation_type: "test sample"
 
-  # regularization: "None"
-  # regularization: "layer norm"
-  # regularization: "weight norm"
-  # regularization: "AdamW (weight decay)"
-
   coord_encoding: "positional encoding L=15"
-  # coord_encoding: "fourier_feat"
 
-  # normalization: "None"
   normalization: "divide by .999 abs quantile"
-  # normalization: "divide by max modulus"
-  # normalization: ".05 / .95 real and imag parts"
-  # normalization: "min/max real and imag parts"

@@ -111,9 +111,9 @@ def main():
         else:
             tensor.requires_grad = False
         
-    # Only embeddings and Hash encoders are optimized.
+    # Only Hash encoders are optimized.
     optimizer = OPTIMIZER_CLASSES[config["optimizer"]["id"]](
-        chain(model.embed_fn.parameters(),), **config["optimizer"]["params"]
+        model.parameters(), **config["optimizer"]["params"]
     )
         
 

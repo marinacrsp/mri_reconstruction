@@ -20,6 +20,7 @@ class KCoordDataset(Dataset):
         n_volumes: int,
         n_slices: int = 3,
         with_mask: bool = True,
+        mask_type = 'Random',
         acceleration: int = 2,
         center_frac: float = 0.15,
         vol_id0: int = 0,
@@ -51,9 +52,15 @@ class KCoordDataset(Dataset):
             ##################################################
             # Mask creation
             ##################################################
-            mask_func = EquiSpacedMaskFunc(
-                center_fractions=[center_frac], accelerations=[acceleration]
-            )
+            if mask_type == 'Random':
+                mask_func = RandomMaskFunc(
+                    center_fractions=[center_frac], accelerations=[acceleration]
+                )
+                
+            elif mask_type == 'Equis':
+                mask_func = EquiSpacedMaskFunc(
+                    center_fractions=[center_frac], accelerations=[acceleration]
+                )
             shape = (1,) * len(volume_kspace.shape[:-3]) + tuple(
                 volume_kspace.shape[-3:]
             )

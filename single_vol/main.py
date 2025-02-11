@@ -65,6 +65,7 @@ def main():
         shuffle=False,
         pin_memory=loader_config["pin_memory"],
     )
+    print(f'N# points: {len(dataset_fullysampled)}')
 
     model_params = config["model"]["params"]
     model = MODEL_CLASSES[config["model"]["id"]](**model_params)

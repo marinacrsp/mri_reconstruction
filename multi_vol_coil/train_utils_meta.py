@@ -24,15 +24,13 @@ OPTIMIZER_CLASSES = {
 
 class Trainer:
     def __init__(
-        self, dataloader, embeddings_vol, phi_vol, vol_optimizer, embeddings_coil, phi_coil, coil_optimizer, embeddings_start_idx, model, loss_fn, optimizer, scheduler, config
+        self, dataloader, embeddings_vol, embeddings_coil, embeddings_start_idx, model, loss_fn, optimizer, scheduler, config
         ) -> None:
         self.device = torch.device(config["device"])
         self.n_epochs = config["n_epochs"]
 
         self.dataloader = dataloader
-        self.phi_vol, self.phi_coil = phi_vol.to(self.device), phi_coil.to(self.device)
         self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
-        self.optimizer_vol_init, self.optimizer_coil_init = vol_optimizer, coil_optimizer
         
         self.start_idx = embeddings_start_idx.to(self.device)
         self.model = model.to(self.device)
@@ -48,8 +46,6 @@ class Trainer:
 
         self.log_interval = config["log_interval"]
         self.inference_mode = config["dataset"]["with_mask"]
-        self.meta_reinitialization = config["meta_learning"]["reinit_step"]
-        self.epsilon_meta = config["meta_learning"]["epsilon"]
         self.checkpoint_interval = config["checkpoint_interval"]
         self.path_to_out = Path(config["path_to_outputs"])
         self.timestamp = config["timestamp"]
@@ -73,8 +69,8 @@ class Trainer:
                 )
         # Scientific and nuissance hyperparameters.
         self.hparam_info = config["hparam_info"]
-        # self.hparam_info["embedding_vol_dim"] = self.embeddings_vol.weight.shape[1]
-        # self.hparam_info["embedding_coil_dim"] = self.embeddings_coil.weight.shape[1]
+        self.hparam_info["embedding_vol_dim"] = self.embeddings_vol.weight.shape[1]
+        self.hparam_info["embedding_coil_dim"] = self.embeddings_coil.weight.shape[1]
 
         # Evaluation metrics for the last log.
         self.last_nmse = [0] * len(self.dataloader.dataset.metadata)
@@ -105,21 +101,6 @@ class Trainer:
         self._log_information(empirical_risk)
         self.writer.close()
         
-    # def _reptile_initialization(self):
-    #     phi_vol_bar = self.embeddings_vol.weight.mean(dim=0)
-    #     phi_coil_bar = self.embeddings_coil.weight.mean(dim=0)
-        
-    #     self.phi_vol += self.epsilon_meta*(phi_vol_bar - self.phi_vol)
-    #     self.phi_coil += self.epsilon_meta*(phi_coil_bar - self.phi_coil)
-        
-    #     self.embeddings_vol.weight.data.copy_(self.phi_vol)
-    #     self.embeddings_coil.weight.data.copy_(self.phi_coil)
-        
-    #     # Update the optimizer to use the new embeddings
-    #     self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
-    #         chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
-    #         **self.config["optimizer"]["params"],
-    #     ) 
     
     def add_noise_model(self, model_temp):
         for _, tensor in model_temp.named_parameters():
@@ -174,7 +155,6 @@ class Trainer:
             
             latent_vol = self.embeddings_vol(vol_ids)
             latent_coil = self.embeddings_coil(self.start_idx[vol_ids] + coil_ids)
-            
             self.optimizer.zero_grad(set_to_none=True)
             
             # ADD NOISE TO MODEL
@@ -186,7 +166,7 @@ class Trainer:
             outputs = self.model(coords, latent_vol, latent_coil)
             
             # Can be thought as a moving average (with "stride" `batch_size`) of the loss.
-            batch_loss = self.loss_fn(outputs, targets, latent_vol)
+            batch_loss = self.loss_fn(outputs, targets, latent_vol, latent_coil)
             batch_loss.backward()
             self.optimizer.step()
         
@@ -497,8 +477,6 @@ class Trainer:
             "model_state_dict": self.model.state_dict(),
             "embedding_vol_state_dict": self.embeddings_vol.state_dict(),
             "embedding_coil_state_dict": self.embeddings_coil.state_dict(),
-            "phi_vol": self.phi_vol,
-            "phi_coil": self.phi_coil,
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
         }
@@ -512,7 +490,7 @@ class Trainer:
         hparam_metrics = {"hparam/loss": loss}
         hparam_metrics["hparam/eval_metric/psnr"] = np.mean(self.last_psnr)
         # hparam_metrics["hparam/eval_metric/psnr_stdev"] = np.std(self.last_psnr)
- 
+
         hparam_metrics["hparam/eval_metric/ssim"] = np.mean(self.last_ssim)
         # hparam_metrics["hparam/eval_metric/ssim_stdev"] = np.std(self.last_ssim)
         
@@ -572,18 +550,18 @@ class MSEL2Loss:
     """Mean Squared Error Loss Function with L2 (latent embedding) Regularization."""
 
     def __init__(self, sigma, gamma):
-        self.sigma_squared = sigma**2
         self.gamma = gamma
 
-    def __call__(self, predictions, targets, embeddings_vol):
+    def __call__(self, predictions, targets, embeddings_vol, embeddings_coil):
         predictions = torch.view_as_complex(predictions)
         targets = torch.view_as_complex(targets)
 
         loss = ((predictions - targets).abs()) ** 2
 
-        reg = (embeddings_vol**2).sum(axis=-1) / self.sigma_squared
+        reg_coil = (embeddings_vol**2).sum(axis=-1)
+        reg_vol = (embeddings_coil**2).sum(axis=-1)
 
-        return torch.mean(loss) + self.gamma * torch.mean(reg)
+        return torch.mean(loss) + self.gamma * (torch.mean(reg_coil) + torch.mean(reg_vol)) * 0.5
 
 
 class MSEDistLoss:

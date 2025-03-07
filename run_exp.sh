@@ -2,7 +2,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --output=logs_new/%j.out
 #SBATCH --cpus-per-task=5
-##SBATCH --constraint=a6000
+#SBATCH --constraint=a6000
 ##SBATCH --time=6:00:00
 
 source /scratch_net/ken/mcrespo/conda/etc/profile.d/conda.sh
@@ -28,14 +28,16 @@ conda activate pytcu11
 # echo "WORLD_SIZE=$WORLD_SIZE"
 
 # python -u multi_vol_hash_coil/main.py
-python -u multi_vol_hash/main.py
+# python -u multi_vol_hash/main.py
 # python -u multi_vol_coil/main.py
 # python -u multi_vol/main.py
+# python -u multi_vol_vae/main.py
 
 # python -u multi_gpu_hash/main.py
 # python -u multi_gpu_coil/main.py
 # python -u multi_gpu_single_hash_table/main.py
 # python -u multi_gpu/main.py
 
-# python -u single_vol/main.py
+python -u single_vol/main.py
+# python -u single_vol_old/main.py
 # python -u single_vol_hash/main.py

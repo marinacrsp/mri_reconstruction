@@ -34,8 +34,8 @@ model:
   id: Siren
   params:
     coord_dim: 3
-    vol_embedding_dim: 1024
-    coil_embedding_dim: 512
+    vol_embedding_dim: 128
+    coil_embedding_dim: 64
     hidden_dim: 512
     L : 10
     n_layers: 8
@@ -43,7 +43,7 @@ model:
 loss:
   id: MSEL2
   params:
-    gamma: 0.001
+    gamma: 0.00
     sigma: 0.1
 
 optimizer:
@@ -58,9 +58,9 @@ scheduler:
     step_size: 20_000
 
 # Training Process
-n_epochs: 500
+n_epochs: 400
 log_interval: 50
-checkpoint_interval: 250  # Keep in mind that each checkpoint takes ~241 MB of space.
+checkpoint_interval: 200  # Keep in mind that each checkpoint takes ~241 MB of space.
 
 freeze_model: False
 
@@ -74,6 +74,6 @@ meta_learning:
 # It does not affect the actual behavior of the run.
 # These values are used solely for Tensorboard output, to help identify run types.
 hparam_info:
-  embedding_vol: 1024
-  embedding_coil : 512
+  embedding_vol: 128
+  embedding_coil : 64
   dropout: false

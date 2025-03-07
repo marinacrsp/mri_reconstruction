@@ -46,71 +46,23 @@ def split_batch (data, size_minibatch):
     
     return sample_batch, iter
 
-def split_matrices_randomly(matrix1, matrix2, Ns):
-    """
-    Splits two matrices randomly into subsets of size Ns.
-    
-    Parameters:
-    - matrix1: np.array of shape (Nm, Nc)
-    - matrix2: np.array of shape (Nm, Nc * Nn)
-    - Ns: int, size of the subset (minibatch)
-    
-    Returns:
-    - List of tuples where each tuple contains two matrices:
-    - Sub-matrix of shape (Ns, Nc)
-      - Sub-matrix of shape (Ns, Nc * Nn)
-    """
-    assert matrix1.shape[0] == matrix2.shape[0], "Both matrices must have the same number of rows (Nm)."
-    Nm = matrix1.shape[0]
-    indices = np.random.permutation(Nm)  # Shuffle indices
-    
-    subsets_1 = []
-    subsets_2 = []
-    for i in range(0, Nm, Ns):
-        subset_indices = indices[i:i+Ns]
-        subsets_1.append(matrix1[subset_indices])
-        subsets_2.append(matrix2[subset_indices])
-    
-    return subsets_1, subsets_2
-
-# def compute_Lsquares (X, Y, alpha):
-#     """Solves the Least Squares giving matrix W"""
-#     # Move everything to cpu
-#     X, Y = X.cpu(), Y.cpu()
-
-#     X_T_X = torch.matmul(X.T, X)
-#     X_T_Y = torch.matmul(X.T, Y)
-    
-#     reg = alpha * torch.eye(X_T_X.shape[0])
-#     W = torch.linalg.solve(X_T_Y+reg, X_T_Y)
-    
-#     PxW = torch.matmul(X, W)
-    
-#     elem1 = torch.linalg.norm((Y - PxW), ord=2) 
-#     elem2 = torch.linalg.norm(W, ord=2) 
-
-#     return W, elem1, elem2
-
 def compute_Lsquares (X, Y, alpha):
     """Solves the Least Squares giving matrix W"""
     # Move everything to cpu
     X, Y = X.cpu(), Y.cpu()
 
-    X_T_X = torch.matmul(X.T, X)
-    X_T_Y = torch.matmul(X.T, Y)
+    P_TxP = torch.matmul(X.T, X)
+    P_TxT = torch.matmul(X.T, Y)
     
-    reg = alpha * torch.eye(X_T_X.shape[0])
+    reg = alpha * torch.eye(P_TxP.shape[0])
+    W = torch.linalg.solve(P_TxP+reg, P_TxT)
     
-    # W = torch.matmul(torch.linalg.inv(reg + X_T_X), X_T_Y)
+    PxW = torch.matmul(X, W)
     
-    W = torch.linalg.solve(X_T_X+reg, X_T_Y)
-    
-    # PxW = torch.matmul(X, W)
-    
-    # elem1 = torch.linalg.norm((Y - PxW), ord=2) 
-    # elem2 = torch.linalg.norm(W, ord=2) 
+    elem1 = torch.linalg.norm((Y - PxW), ord=2) 
+    elem2 = torch.linalg.norm(W, ord=2) 
 
-    return W
+    return W, elem1, elem2
 
 
 def L_pisco (Ws):
@@ -125,8 +77,8 @@ def L_pisco (Ws):
     for i in range(Ns):
         for j in range(i+1, Ns):
             diff = Ws[i].flatten() - Ws[j].flatten()
-            ldist = torch.linalg.norm(diff.real, ord =1) + torch.linalg.norm(diff.imag, ord =1)
-            total_loss += ldist
+            pisco = torch.linalg.norm(diff, ord=1)
+            total_loss += pisco
                 
     return (1/Ns**2) * total_loss
     
@@ -186,12 +138,12 @@ def get_grappa_matrixes (inputs, shape, patch_size, normalized: bool):
     Nn = n_r_patch.shape[1]
 
     # Normalize the Nt targets coordinates
-    n_r_kcoors = torch.zeros((r_kcoors.shape), dtype=torch.float16)
+    n_r_koors = torch.zeros((r_kcoors.shape), dtype=torch.float16)
     
     for idx in range(len(shape)):
-        n_r_kcoors[...,idx] = normalize_fn(r_kcoors[...,idx], norm_cte[idx])
+        n_r_koors[...,idx] = normalize_fn(r_kcoors[...,idx], norm_cte[idx])
         
-    return n_r_kcoors, n_r_patch, Nn
+    return n_r_koors, n_r_patch, Nn
 
 
 class get_patch:
@@ -226,7 +178,6 @@ class get_patch:
         kx = batch_coors[:,:,0][:,0].unsqueeze(1)  # shape: (batch_size, 1)
         ky = batch_coors[:,:,1][:,1].unsqueeze(1)  # shape: (batch_size, 1)
         kz = batch_coors[:,:,2][:,0].unsqueeze(1)  # shape: (batch_size, 1)
-        
         
         # Compute all neighbor shifts at once (apply shifts to kx, ky)
         kx_neighbors = torch.clamp(kx + shifts[:, 0], 0, self.width - 1)

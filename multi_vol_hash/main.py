@@ -94,9 +94,9 @@ def main():
             numbers = re.findall(r'\d+', layer_name)
             level = int(numbers[-1]) # Find out the level id
             tensor.data.copy_(table_dict[level]) # Locate the level ID in the table dictionary
-        # else:
-        #     tensor.data.copy_(model_state_dict[layer_name])
-        #     print(layer_name)
+        else:
+            tensor.data.copy_(model_state_dict[layer_name])
+            print(layer_name)
     print('Hash tables initialized from checkpoint, model loaded')
 
     ##### Optimizer

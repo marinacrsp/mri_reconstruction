@@ -27,7 +27,7 @@ class Siren(nn.Module):
 
         self.sine_layers = [
             SineLayer(
-                coord_encoding_dim + vol_embedding_dim + coil_embedding_dim,
+                coord_encoding_dim + vol_embedding_dim*2 + coil_embedding_dim*2,
                 hidden_dim,
                 is_first=True,
                 omega_0=omega_0,
@@ -39,7 +39,7 @@ class Siren(nn.Module):
                 self.res_layer_idx = layer_idx + 1
                 self.sine_layers.append(
                     SineLayer(
-                        hidden_dim + vol_embedding_dim + coil_embedding_dim,
+                        hidden_dim + vol_embedding_dim*2 + coil_embedding_dim*2,
                         hidden_dim,
                         is_first=False,
                         omega_0=omega_0,
@@ -52,8 +52,8 @@ class Siren(nn.Module):
                 # self.sine_layers.append(nn.LayerNorm(hidden_dim))
                 # self.sine_layers.append(nn.BatchNorm1d(hidden_dim))
         self.sine_layers = nn.ModuleList(self.sine_layers)
-
         self.output_layer = nn.Linear(hidden_dim, out_dim)
+        
         with torch.no_grad():
             self.output_layer.weight.uniform_(
                 -np.sqrt(6 / hidden_dim) / omega_0, np.sqrt(6 / hidden_dim) / omega_0
@@ -67,13 +67,16 @@ class Siren(nn.Module):
         x = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
         x = x.view(x.size(0), -1)
 
+        vol_embedding = torch.cat([torch.cos(vol_embedding), torch.sin(vol_embedding)], dim=-1)
+        coil_embedding = torch.cat([torch.cos(coil_embedding), torch.sin(coil_embedding)], dim=-1)
+
         # Concatenate embeddings and positional encodings.
-        x = torch.cat([vol_embedding, coil_embedding, x], dim=-1)
+        x = torch.cat([x, vol_embedding, coil_embedding], dim=-1)
 
         for layer_idx, layer in enumerate(self.sine_layers):
             # Residual connection.
             if layer_idx == self.res_layer_idx:
-                x = torch.cat([vol_embedding, coil_embedding, x], dim=-1)
+                x = torch.cat([x, vol_embedding, coil_embedding], dim=-1)
 
             x = layer(x)
             # x = self.dropout(x)

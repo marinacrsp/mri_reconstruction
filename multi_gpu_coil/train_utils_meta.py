@@ -30,9 +30,7 @@ class Trainer:
         self,
         dataloader,
         embeddings_vol,
-        phi_vol,
         embeddings_coil,
-        phi_coil,
         embeddings_coil_idx,
         model,
         loss_fn,
@@ -54,9 +52,7 @@ class Trainer:
             
         self.embeddings_vol, self.embeddings_coil = embeddings_vol.to(self.device), embeddings_coil.to(self.device)
         self.embeddings_vol, self.embeddings_coil = DDP(embeddings_vol, device_ids=[self.device]), DDP(embeddings_coil, device_ids=[self.device])
-        self.phi_vol, self.phi_coil = phi_vol.to(self.device), phi_coil.to(self.device)
-        self.phi_vol, self.phi_coil = DDP(self.phi_vol, device_ids = [self.device]), DDP(self.phi_coil, device_ids = [self.device])
-        
+
         # Wrap the model in the data distributed parallelism
         self.model = model.to(self.device)
         self.model = DDP(self.model, device_ids=[self.device])
@@ -126,45 +122,6 @@ class Trainer:
             # Otherwise, the same ordering will be always used.
             self.dataloader.sampler.set_epoch(epoch_idx)
             
-            if self.freeze_model: # NOTE: Otherwise train normally
-                
-                if (epoch_idx + 1) >= self.freeze_range[0][0]: #NOTE: First X epochs: train model and embeddings jointly
-
-                    if any(start <= (epoch_idx + 1) <= end for start, end in self.freeze_range): # Freeze the model, train the embeddings
-
-                        if self.device == 0:
-                            print(f"Epoch : {epoch_idx} training embeddings, freezing model")
-                        
-                        for param in self.model.module.parameters():
-                            param.requires_grad = False
-                            
-                        for param in self.embeddings_coil.module.parameters():
-                            param.requires_grad = True
-
-                        for param in self.embeddings_vol.module.parameters():
-                            param.requires_grad = True
-                            
-                        for _, value in enumerate(self.freeze_range):
-                            # Reptile initialization only when epoch_idx matches the first epoch of the freezing range
-                            if (epoch_idx + 1) == value[0]:
-                                print(f"Epoch: {epoch_idx}, reptile reinitialization of embeddings")
-                                self._reptile_initialization()
-        
-                    else: # Freeze the embeddings, train the model
-                        if self.device == 0:
-                            print(f"Epoch : {epoch_idx} training model, freezing embeddings")
-                            
-                            
-                        for param in self.embeddings_coil.module.parameters():
-                            param.requires_grad = False
-
-                        for param in self.embeddings_vol.module.parameters():
-                            param.requires_grad = False
-                            
-                        for param in self.model.module.parameters():
-                            param.requires_grad = True
-            
-            
             ## Keep the training process itself outside the condition of whether we want meta learning or not
             empirical_risk = self._run_epoch()
 
@@ -222,28 +179,6 @@ class Trainer:
         avg_loss = avg_loss / n_obs
         return avg_loss
 
-
-    def _reptile_initialization(self):
-        phi_vol_bar = self.embeddings_vol.module.weight.mean(dim=0).clone()
-        phi_coil_bar = self.embeddings_coil.module.weight.mean(dim=0).clone()
-        
-        if self.device == 0:
-            print(f"before reinit: {self.phi_coil.module.weight.data}")
-            print(f"vector update : {phi_coil_bar}")
-        self.phi_vol.module.weight.data += self.epsilon_meta*(phi_vol_bar - self.phi_vol.module.weight.data)
-        self.phi_coil.module.weight.data += self.epsilon_meta*(phi_coil_bar - self.phi_coil.module.weight.data)
-        
-        self.embeddings_vol.module.weight.data.copy_(self.phi_vol.module.weight.data)
-        self.embeddings_coil.module.weight.data.copy_(self.phi_coil.module.weight.data)
-        
-        if self.device == 0:
-            print(f"after reinit {self.phi_coil.module.weight.data}")
-            
-        # Update the optimizer to use the new embeddings
-        self.optimizer = OPTIMIZER_CLASSES[self.config["optimizer"]["id"]](
-            chain(self.embeddings_vol.parameters(), self.embeddings_coil.parameters(), self.model.parameters()),
-            **self.config["optimizer"]["params"],
-        ) 
                 
     ###########################################################################
     ###########################################################################
@@ -568,8 +503,6 @@ class Trainer:
             "model_state_dict": self.model.module.state_dict(),
             "embedding_coil_state_dict": self.embeddings_coil.module.state_dict(),
             "embedding_vol_state_dict": self.embeddings_vol.module.state_dict(),
-            "phi_vol": self.phi_vol.module.state_dict(),
-            "phi_coil": self.phi_coil.module.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
         }

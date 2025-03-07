@@ -127,9 +127,6 @@ def main(rank: int, world_size: int, config: dict):
         embeddings_coil = torch.nn.Embedding(total_n_coils.item(), model_params['coil_embedding_dim'])
         embeddings_vol = torch.nn.Embedding(len(dataset.metadata), model_params['vol_embedding_dim'])
 
-        phi_coil_zero = torch.nn.Embedding(1, model_params['coil_embedding_dim'])
-        phi_vol_zero = torch.nn.Embedding(1, model_params['vol_embedding_dim'])
-        
         
         if "model_checkpoint" in config.keys():
             model_state_dict = torch.load(config["model_checkpoint"])[
@@ -144,12 +141,12 @@ def main(rank: int, world_size: int, config: dict):
             
         else:
             ## Initialize the phi volumes for the coil and volume
-            torch.nn.init.normal_(phi_coil_zero.weight.data, 0.0, config["loss"]["params"]["sigma"])
-            torch.nn.init.normal_(phi_vol_zero.weight.data, 0.0, config["loss"]["params"]["sigma"])
+            # torch.nn.init.normal_(embeddings_coil.weight.data, 0.0, config["loss"]["params"]["sigma"])
+            # torch.nn.init.normal_(embeddings_vol.weight.data, 0.0, config["loss"]["params"]["sigma"])
 
             ## Copy the values into the dictionary of embeddings
-            embeddings_coil.weight.data.copy_(phi_coil_zero.weight.data)
-            embeddings_vol.weight.data.copy_(phi_vol_zero.weight.data)
+            torch.nn.init.uniform_(embeddings_coil.weight.data, 0, 2*math.pi)
+            torch.nn.init.uniform_(embeddings_vol.weight.data, 0, 2*math.pi)
 
         optimizer = OPTIMIZER_CLASSES[config["optimizer"]["id"]](
             chain(embeddings_vol.parameters(), embeddings_coil.parameters(), model.parameters()),
@@ -177,12 +174,10 @@ def main(rank: int, world_size: int, config: dict):
 
     trainer = Trainer(
         dataloader=dataloader,
-        embeddings_vol=embeddings_vol,
-        phi_vol = phi_vol_zero,
-        embeddings_coil=embeddings_coil,
-        phi_coil = phi_coil_zero,
+        embeddings_vol= embeddings_vol,
+        embeddings_coil= embeddings_coil,
         embeddings_coil_idx = start_idx,
-        model=model,
+        model= model,
         loss_fn=loss_fn,
         optimizer=optimizer,
         scheduler=scheduler,

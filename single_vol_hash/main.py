@@ -54,7 +54,7 @@ def main():
     dataloader_undersampled = DataLoader(
         dataset_undersampled,
         batch_size=loader_config["batch_size"],
-        num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]),
+        num_workers=2,
         shuffle=True,
         pin_memory=loader_config["pin_memory"],
     )
@@ -62,7 +62,7 @@ def main():
     dataloader_fullysampled = DataLoader(
         dataset_fullysampled,
         batch_size=loader_config["batch_size"],
-        num_workers=int(os.environ["SLURM_CPUS_PER_TASK"]),
+        num_workers=2,
         shuffle=False,
         pin_memory=loader_config["pin_memory"],
     )
@@ -74,7 +74,7 @@ def main():
         model_state_dict = torch.load(config["model_checkpoint"])["model_state_dict"]
         model.load_state_dict(model_state_dict)
         print("Checkpoint loaded successfully.")
-
+        print(model)
     loss_fn = LOSS_CLASSES[config["loss"]["id"]](**config["loss"]["params"])
     optimizer = OPTIMIZER_CLASSES[config["optimizer"]["id"]](
         model.parameters(), **config["optimizer"]["params"]

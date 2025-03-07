@@ -24,10 +24,10 @@ class Siren(nn.Module):
         L_mult = torch.pow(2, torch.arange(self.L)) * math.pi
         self.register_buffer("L_mult", L_mult)
         coord_encoding_dim = self.L * 2 * coord_dim
-
+        breakpoint()
         self.sine_layers = [
             SineLayer(
-                coord_encoding_dim + vol_embedding_dim + coil_embedding_dim,
+                coord_encoding_dim + vol_embedding_dim*2 + coil_embedding_dim*2,
                 hidden_dim,
                 is_first=True,
                 omega_0=omega_0,
@@ -39,7 +39,7 @@ class Siren(nn.Module):
                 self.res_layer_idx = layer_idx + 1
                 self.sine_layers.append(
                     SineLayer(
-                        hidden_dim + vol_embedding_dim + coil_embedding_dim,
+                        hidden_dim + vol_embedding_dim*2 + coil_embedding_dim*2,
                         hidden_dim,
                         is_first=False,
                         omega_0=omega_0,
@@ -66,14 +66,13 @@ class Siren(nn.Module):
         
         x = coords.unsqueeze(-1) * self.L_mult
         x = torch.cat([torch.sin(x), torch.cos(x)], dim=-1)
+        x = x.view(x.size(0), -1)
         
-        if coords.ndimension() == 1:
-            x = x.view(x.size(0)*x.size(1)) 
-        else:
-            x = x.view(x.size(0), -1)
+        vol_embedding = torch.cat([torch.cos(vol_embedding), torch.sin(vol_embedding)], dim=-1)
+        coil_embedding = torch.cat([torch.cos(coil_embedding), torch.sin(coil_embedding)], dim=-1)
+
         # Concatenate embeddings and positional encodings.
         x = torch.cat([vol_embedding, coil_embedding, x], dim=-1)
-        
 
         for layer_idx, layer in enumerate(self.sine_layers):
             # Residual connection.

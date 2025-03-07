@@ -1,0 +1,187 @@
+import os
+import random
+from pathlib import Path
+from typing import Union
+
+import h5py
+import numpy as np
+import torch
+from data_utils import *
+from fastmri.data.subsample import EquiSpacedMaskFunc, RandomMaskFunc
+from fastmri.data.transforms import tensor_to_complex_np, to_tensor
+from torch.utils.data import Dataset
+
+
+class KCoordDataset(Dataset):
+
+    def __init__(
+        self,
+        path_to_data: Union[str, Path, os.PathLike],
+        n_volumes: int,
+        n_slices: int = 3,
+        with_mask: bool = True,
+        with_center: bool = False,
+        acceleration: int = 4,
+        center_frac: float = 0.15,
+    ):
+        self.metadata = {}
+        self.inputs = []
+        self.inputs_unnormalized = []
+        self.targets = []
+        self.dict_volumes = []
+
+        path_to_data = Path(path_to_data)
+        if path_to_data.is_dir():
+            files = sorted(
+                [
+                    file
+                    for file in path_to_data.iterdir()
+                    if file.suffix == ".h5" and "AXT1POST_205" in file.name
+                    # if file.suffix == ".h5" and "AXT2_205" in file.name # T2 sequence
+                    
+                ]
+            )[:n_volumes]
+        else:
+            files = [path_to_data]
+
+        # For each MRI volume in the dataset...
+        for vol_id, file in enumerate(files):
+            # Load MRI volume
+            with h5py.File(file, "r") as hf:
+                volume_kspace = to_tensor(preprocess_kspace(hf["kspace"][()]))[
+                    :n_slices
+                ]
+
+            if n_slices == 1: # Remove redundant first coordinate
+                volume_kspace = volume_kspace.squeeze(0)
+            
+            sum_coil_modulus_ks = torch.tensor(rss(tensor_to_complex_np(volume_kspace))) # array of mean coil modulus
+            sum_coil_phases_ks = torch.tensor(combine_phase(tensor_to_complex_np(volume_kspace), coil_axis=0)) # array of mean coil phases
+            self.dict_volumes.append(
+                torch.stack([
+                torch.tensor(sum_coil_modulus_ks), torch.tensor(sum_coil_phases_ks)], dim=-1).float().permute(2,0,1)
+                )
+            breakpoint()
+            ##################################################
+            # Mask creation
+            ##################################################
+            mask_func = EquiSpacedMaskFunc(
+                center_fractions=[center_frac], accelerations=[acceleration]
+            )
+            shape = (1,) * len(volume_kspace.shape[:-3]) + tuple(
+                volume_kspace.shape[-3:]
+            )
+            mask, _ = mask_func(
+                shape, None, vol_id
+            )  # use the volume index as random seed.
+
+            if with_center: # NOTE: Don't remove the center
+                _, left_idx, right_idx = remove_center(mask)
+            else:
+                mask, left_idx, right_idx = remove_center(mask)
+            #   # NOTE: Uncomment to include the center region in the training data. Note that 'left_idx' and 'right_idx' are still needed.
+
+            ##################################################
+            # Computing the indices
+            ##################################################
+            n_coils, height, width = volume_kspace.shape[:-1]
+            if with_mask:
+                kx_ids = torch.where(mask.squeeze())[0]
+                    
+            else:
+                if with_center:
+                    kx_ids = torch.arange(width)
+                else:
+                    kx_ids = torch.from_numpy(np.setdiff1d(np.arange(width), np.arange(left_idx, right_idx))) # NOTE: Uncomment to include all the datapoints (fully-sampled volume), with the exception of the center region.
+
+            ky_ids = torch.arange(height)
+            coil_ids = torch.arange(n_coils)
+
+            kspace_ids = torch.meshgrid(kx_ids, ky_ids, coil_ids, indexing="ij")
+            kspace_ids = torch.stack(kspace_ids, dim=-1).reshape(-1, len(kspace_ids))
+
+            ##################################################
+            # Computing the inputs
+            ##################################################
+            # Convert indices into normalized coordinates in [-1, 1].
+            kspace_coords = torch.zeros((kspace_ids.shape[0], len(volume_kspace.shape[:-1])), dtype=torch.float)
+            kspace_coords[:, 0] = (2 * kspace_ids[:, 0]) / (width - 1) - 1
+            kspace_coords[:, 1] = (2 * kspace_ids[:, 1]) / (height - 1) - 1
+            kspace_coords[:, 2] = (2 * kspace_ids[:, 2]) / (n_coils - 1) - 1
+
+            # Used to determine the latent vector (one per volume).
+            vol_ids = torch.tensor([vol_id] * len(kspace_coords)).unsqueeze(1)
+
+            # Appended volume index
+            self.inputs.append(torch.cat((vol_ids, kspace_coords), dim=1))
+            self.inputs_unnormalized.append(torch.cat((vol_ids, kspace_ids), dim=1))
+
+            ##################################################
+            # Computing the targets
+            ##################################################
+            
+            targets = volume_kspace[
+                # coilid, ky, kx
+                kspace_ids[:, 2], kspace_ids[:, 1], kspace_ids[:, 0]
+            ]
+
+            # Compute 0.999 quantile of modulus.
+            quant_mod = torch.quantile(torch.abs(torch.view_as_complex(targets)), 0.999)
+            targets = targets / quant_mod  # Normalize targets
+
+            self.targets.append(targets)
+
+            ##################################################
+            # Add metadata from the current volume
+            ##################################################
+            # Values from the center region (used in 'predict' method).
+            center_vals = tensor_to_complex_np(
+                volume_kspace[..., left_idx:right_idx, :]
+            )
+            
+            # Constant (used in '_plot_info' method).
+            plot_cste = quant_mod
+
+            self.metadata[vol_id] = {
+                "file": file,
+                "mask": mask,
+                "shape": (n_coils, height, width),
+                "plot_cste": plot_cste,
+                "norm_cste": quant_mod,
+                "center": {
+                    "left_idx": left_idx,
+                    "right_idx": right_idx,
+                    "vals": center_vals,
+                },
+            }
+        # self.inputs = torch.cat(self.inputs, dim=0).float()
+        # self.targets = torch.cat(self.targets, dim=0).float()
+        
+        
+        self.inputs_unnormalized = torch.cat(self.inputs_unnormalized, dim=0)
+        self.dict_volumes = torch.stack(self.dict_volumes, dim=0)
+        
+        ## Create the grid of coordinates
+        x = torch.arange(320).view(1, width, 1).expand(1, width, height)  # X-coordinates
+        y = torch.arange(320).view(1, 1, height).expand(1, width, height)  # Y-coordinates
+        # Stack x and y to create a grid (shape: [1, 2, kx, ky])
+        self.coords = torch.stack((x, y), dim=1).float()  # (1, 2, 320, 320) Output dimension
+        self.coords = self.coords.repeat(n_volumes, 1, 1, 1).permute(0, 2, 3, 1) # Final dim: (bsz, 320, 320, 2)
+        
+                
+    def __getitem__(self, idx):
+        return self.inputs[idx], self.inputs_unnormalized[idx], self.targets[idx]
+
+    def __len__(self):
+        return len(self.targets)
+
+
+def seed_worker(worker_id):
+    """
+    Controlling randomness in multi-process data loading. The RNGs are used by
+    the RandomSampler to generate random indices for data shuffling.
+    """
+    # Use `torch.initial_seed` to access the PyTorch seed set for each worker.
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)

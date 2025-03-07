@@ -78,6 +78,10 @@ def main(rank: int, world_size: int, config: dict):
         embeddings.weight.data, 0.0, config["loss"]["params"]["sigma"]
     )
 
+    # torch.nn.init.uniform_(
+    #         embeddings.weight.data, 0, 2*math.pi
+    #     )
+
     model = MODEL_CLASSES[config["model"]["id"]](**model_params)
 
     if config["runtype"] == "test":

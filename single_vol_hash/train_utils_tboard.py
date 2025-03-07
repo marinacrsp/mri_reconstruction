@@ -210,6 +210,7 @@ class Trainer:
             )
 
             volume_kspace = self.predict(vol_id, shape, left_idx, right_idx, center_vals, epoch_idx)
+            # volume_kspace[..., left_idx:right_idx] = 0
             cste_mod = self.dataloader_consistency.dataset.metadata[vol_id]["norm_cste"]
             
             y_kspace_data = tensor_to_complex_np(self.kspace_gt)
@@ -219,14 +220,26 @@ class Trainer:
             y_kspace_data_u = y_kspace_data  * (mask)
             y_kspace_prediction_u = volume_kspace * (1-mask)
             y_kspace_final = y_kspace_data_u + y_kspace_prediction_u
-
-            y_kspace_data_rss = rss(y_kspace_data_u)
-            y_kspace_prediction_rss = rss(y_kspace_prediction_u)
-            y_kspace_final_rss = rss(y_kspace_final)
             
-            y_kspace_final[..., left_idx:right_idx] = center_vals
-            y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
-            y_kspace_final_wcenter_rss = rss(y_kspace_final)
+            y_kspace_final[...,left_idx:right_idx] = center_vals
+            y_kspace_wcenter = rss(y_kspace_final)
+            y_kspace_final = rss(y_kspace_final)
+            y_kspace_final[...,left_idx:right_idx] = 0
+            
+            # y_kspace_data_rss = rss(y_kspace_data_u)
+            # y_kspace_prediction_rss = rss(y_kspace_prediction_u)
+            # y_kspace_final_rss = rss(y_kspace_final)
+            
+            # y_kspace_final[..., left_idx:right_idx] = center_vals
+            # y_img_final = np.abs(rss(inverse_fft2_shift(y_kspace_final)))
+            # y_kspace_final_wcenter_rss = rss(y_kspace_final)
+            
+            
+            ## Model predictions
+            y_kspace_raw, y_kspace_raw_center = rss(volume_kspace), rss(volume_kspace)
+            y_kspace_raw_center[..., left_idx:right_idx] = rss(center_vals)
+            y_kspace_raw[..., left_idx:right_idx] = 0
+            
             
             ###### predict the edges - image
             y_img_edges = np.abs(rss(inverse_fft2_shift(volume_kspace)))
@@ -234,54 +247,64 @@ class Trainer:
             ###### predict the center - image
             volume_kspace[..., left_idx:right_idx] = center_vals
             y_img_edges_center = np.abs(rss(inverse_fft2_shift(volume_kspace)))
-            volume_kspace_rss = rss(volume_kspace)
             
             ###### raw img w/o 
             y_kspace_data[..., left_idx:right_idx] = 0
             raw_img_edges = np.abs(rss(inverse_fft2_shift(y_kspace_data)))
             
+            
+            ## Modulus
+            modulus_kspace = fft2_shift(y_img_edges_center)
+            modulus_kspace[...,left_idx:right_idx] = 0
+            phase_kspace = np.angle(fft2_shift(y_img_edges_center))
+            cste_arg = np.pi/180
 
             for slice_id in range(shape[0]):
-                self._plot_3subplots(y_img_edges, 'Edges',
-                                    y_img_edges_center, 'Edges + centre',
-                                    y_img_final, 'Edges + centre + acquisitions', 
-                                    slice_id, 
-                                    epoch_idx, 
-                                    f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img",
-                                    'gray')
+                # self._plot_3subplots(y_img_edges, 'pred',
+                #                     y_img_edges_center, 'pred + centre',
+                #                     y_img_final, 'pred + centre + acquisitions', 
+                #                     slice_id, 
+                #                     epoch_idx, 
+                #                     f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img",
+                #                     'gray')
 
-                self._plot_3subplots(np.abs(y_kspace_data_rss/cste_mod), 'M · ydata',
-                                    np.abs(y_kspace_prediction_rss/cste_mod), '(1-M) · ypred', 
-                                    np.abs(y_kspace_final_rss/cste_mod), 'M · ydata + (1-M)·ypred',
+                # self._plot_3subplots(np.abs(y_kspace_data_rss/cste_mod), 'M · ydata',
+                #                     np.abs(y_kspace_prediction_rss/cste_mod), '(1-M) · ypred', 
+                #                     np.abs(y_kspace_final_rss/cste_mod), 'M · ydata + (1-M)·ypred',
+                #                     slice_id, epoch_idx, 
+                #                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace composition",
+                #                     'viridis')
+                self._plot_2subplots(y_img_edges, 'pred',
+                                    y_img_edges_center, 'pred + centre', 
                                     slice_id, epoch_idx, 
-                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace composition",
-                                    'viridis')
+                                    f"prediction/vol_{vol_id}_slice_{slice_id}/volume_img", 'gray')
+                
+                self._plot_2subplots(
+                                    (phase_kspace/cste_arg), 'Modulus kspace predict + center', 
+                                    np.abs(y_kspace_raw), 'Modulus kspace predict',
+                                    slice_id, epoch_idx, 
+                                    f"kspace/vol_{vol_id}_slice_{slice_id}", 'viridis')
+                
+                # self._plot_2subplots(np.log(volume_kspace_rss/cste_mod + 1.e-45), 'kspace predicted',
+                #                     np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
+                #                     slice_id, epoch_idx, 
+                #                     f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
+            
 
-                self._plot_2subplots(self.ground_truth, 'groundtruth vol',
-                                    raw_img_edges, 'groundtruth edges', 
-                                    slice_id, epoch_idx, 
-                                    f"groundtruth/vol_{vol_id}_slice_{slice_id}", 'gray')
-                
-                self._plot_2subplots(np.log(volume_kspace_rss/cste_mod + 1.e-45), 'kspace predicted',
-                                    np.log(y_kspace_final_wcenter_rss/ cste_mod + 1.e-45), 'kspace predicted + acquired', 
-                                    slice_id, epoch_idx, 
-                                    f"prediction/vol_{vol_id}_slice_{slice_id}/kspace logarigthm", 'viridis')
-            
-            
-                # Plot 4 coils image
-                # fig = plt.figure(figsize=(20, 10))
-                
-                # for i in range(4):
-                #     plt.subplot(1,4,i+1)
-                #     plt.imshow(coils_img[slice_id], cmap='gray')
-                #     plt.axis('off')
-                
-                # self.writer.add_figure(
-                #     f"prediction/vol_{vol_id}/slice_{slice_id}/coils_img",
-                #     fig,
-                #     global_step=epoch_idx,
-                # )
-                # plt.close(fig)
+
+                # if self.add_pisco and (epoch_idx + 1) >= self.E_epoch:
+                #     fig = plt.figure(figsize=(10,5))
+                #     for i in range(4): # Plot the first 4 coils
+                #         plt.subplot(1,4,i+1)
+                #         plt.imshow(grappa_volume[slice_id,i,...], cmap='gray')
+                #         plt.axis('off')
+
+                #     self.writer.add_figure(
+                #         f"prediction/vol_{vol_id}/slice{slice_id}/coils_img",
+                #         fig,
+                #         global_step=epoch_idx,
+                #     )
+                #     plt.close(fig)
                 
                 
 
@@ -308,19 +331,7 @@ class Trainer:
 
             ssim_val = ssim(self.ground_truth, y_img_edges_center)
             self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_wcenter", ssim_val, epoch_idx)
-
-            # ############################################################
-            # # Comparison metrics for the volume image w center + predictions and the groundtruth
-            nmse_val = nmse(self.ground_truth, y_img_final)
-            self.writer.add_scalar(f"eval/vol_{vol_id}/nmse_acq_pred", nmse_val, epoch_idx)
-
-            psnr_val = psnr(self.ground_truth, y_img_final)
-            self.writer.add_scalar(f"eval/vol_{vol_id}/psnr_acq_pred", psnr_val, epoch_idx)
-
-            ssim_val = ssim(self.ground_truth, y_img_final)
-            self.writer.add_scalar(f"eval/vol_{vol_id}/ssim_acq_pred", ssim_val, epoch_idx)
-
-            # Update.
+            
             self.last_nmse = nmse_val
             self.last_psnr = psnr_val
             self.last_ssim = ssim_val
@@ -368,7 +379,8 @@ class Trainer:
         plt.imshow(data_2[slice_id], cmap=map)
         plt.title(title2)
         plt.axis('off')
-            
+        plt.colorbar()
+        
         self.writer.add_figure(
             tag,
             fig,

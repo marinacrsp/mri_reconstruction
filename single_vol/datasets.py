@@ -20,7 +20,7 @@ class KCoordDataset(Dataset):
         n_slices: int = 3,
         with_mask: bool = True,
         acceleration: int = 4,
-        mask_type = 'Random',
+        mask_type = 'Equispaced',
         center_frac: float = 0.15,
     ):
         self.metadata = {}
@@ -50,7 +50,7 @@ class KCoordDataset(Dataset):
             ##################################################
             # Mask creation
             ##################################################
-            if mask_type == 'Random':
+            if mask_type == "Random":
                 mask_func = RandomMaskFunc(center_fractions=[center_frac], accelerations=[acceleration])
                 
             else: 
